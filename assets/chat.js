@@ -23,6 +23,7 @@ var CFG = window.NP = window.NP || {};
 var ENDPOINT   = CFG.chatEndpoint || null;
 var ESCALATE   = CFG.escalateEndpoint || null;
 var LEAD_URL   = CFG.bookEndpoint || null;
+var MESSAGES   = CFG.messagesEndpoint || null;
 var PHONE_TEL  = CFG.tel   || '+13106179503';
 var PHONE_TEXT = CFG.phone || '(310) 617-9503';
 var MARK       = CFG.markSrc || 'assets/mark.png';
@@ -104,6 +105,7 @@ function system(text){
   d.textContent = text;
   log.appendChild(d);
   scroll();
+  return d;   /* callers remove transient notices like "connecting…" */
 }
 
 function typing(on){
@@ -180,6 +182,9 @@ function handoff(reason, opts){
     var note = system('Passing this to someone now…');
     postEscalation(reason).then(function(r){
       if(note) note.remove();
+      /* Someone is on and a live thread opened -- talk in this window
+         rather than sending them off to find a phone. */
+      if(r && r.live && r.token && MESSAGES){ startLive(r.token, r.message); return; }
       afterAlert(r && r.alerted, r ? r.needsPhone : true, r && r.message);
     }).catch(function(){
       if(note) note.remove();
@@ -213,6 +218,103 @@ function postEscalation(reasonText){
     if(timer) clearTimeout(timer);
     throw e;
   });
+}
+
+/* ##### SECTION: CHAT / LIVE SESSION #####
+   A real person is reachable in this window. Used when someone is on a
+   computer with no phone to hand -- which is exactly when a "we'll call
+   you" is useless. */
+var live = { on: false, token: null, lastId: 0, timer: null, connected: false };
+
+function startLive(token, message){
+  live.on = true;
+  live.token = token;
+  live.lastId = 0;
+  live.connected = false;
+
+  bubble(message || 'Connecting you to someone now — hang on a moment.', 'bot');
+  setHeadState('Connecting…');
+  input.placeholder = 'Type your message…';
+  pollLive();
+  live.timer = setInterval(pollLive, 3000);
+}
+
+function stopLive(){
+  live.on = false;
+  if(live.timer){ clearInterval(live.timer); live.timer = null; }
+  setHeadState('AI assistant');
+  input.placeholder = 'Describe what it is doing…';
+}
+
+function setHeadState(text){
+  var s = panel.querySelector('.chat-head .meta span');
+  if(s) s.textContent = text;
+}
+
+function pollLive(){
+  if(!live.on) return;
+  /* Back off entirely while the tab is hidden -- no point polling for a
+     window nobody is looking at. */
+  if(document.hidden) return;
+
+  fetch(MESSAGES + '?c=' + encodeURIComponent(convoId) +
+        '&t=' + encodeURIComponent(live.token) +
+        '&after=' + live.lastId)
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(j){
+      if(!j || !j.ok) return;
+
+      (j.messages || []).forEach(function(m){
+        live.lastId = Math.max(live.lastId, m.id);
+        if(m.role === 'operator'){
+          if(!live.connected){
+            live.connected = true;
+            system((m.operator || 'Someone') + ' has joined');
+            setHeadState((m.operator || 'A person') + ' — live');
+          }
+          bubble(m.body, 'bot');
+        } else if(m.role === 'system'){
+          system(m.body);
+        }
+      });
+
+      if(j.status === 'live' && !live.connected){
+        live.connected = true;
+        setHeadState((j.operator || 'A person') + ' — live');
+      }
+
+      /* Nobody came. Say so and take a number instead of leaving them
+         watching an empty room. */
+      if(j.timedOut || j.status === 'closed'){
+        stopLive();
+        if(!live.connected){
+          bubble('Nobody is free to type right now, sorry. Leave a number and someone will call you back — or call now and skip the wait.', 'bot');
+          askForCallback();
+        } else {
+          system('Chat ended');
+          cards([
+            { icon: 'phone', label: 'Call ' + PHONE_TEXT, href: 'tel:' + PHONE_TEL },
+            { icon: 'cal',   label: 'Book a visit', onClick: function(){ openBooking(); } }
+          ]);
+        }
+      }
+    })
+    .catch(function(){ /* a dropped poll is not worth telling anyone about */ });
+}
+
+function sendLive(text){
+  bubble(text, 'me');
+  fetch(MESSAGES, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversationId: convoId, token: live.token, body: text })
+  }).then(function(r){ return r.json().catch(function(){ return {}; }); })
+    .then(function(j){
+      if(!j.ok) throw new Error('send failed');
+    })
+    .catch(function(){
+      system('That did not send. Call ' + PHONE_TEXT + ' and someone will pick up.');
+    });
 }
 
 /* What the visitor sees once we know whether a person was actually
@@ -401,9 +503,16 @@ function sendCallbackRequest(phone){
 function submit(text){
   if(busy || !text.trim()) return;
   text = text.trim();
-  bubble(text, 'me');
   input.value = '';
   setChips([]);
+
+  /* A person is on the other end -- the model is out of the loop now. */
+  if(live.on){
+    sendLive(text);
+    return;
+  }
+
+  bubble(text, 'me');
 
   /* We asked for a callback number and this is the answer. */
   if(awaitingPhone){

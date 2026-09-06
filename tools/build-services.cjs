@@ -381,7 +381,8 @@ window.NP = {
   markSrc: '${up}assets/mark.png',
   bookEndpoint: '/api/lead',
   chatEndpoint: '/api/chat',
-  escalateEndpoint: '/api/escalate'
+  escalateEndpoint: '/api/escalate',
+  messagesEndpoint: '/api/messages'
 };
 </script>
 <script src="${up}assets/site.js"></script>

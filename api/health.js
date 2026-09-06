@@ -11,14 +11,18 @@
 import { cors, methodGuard, json, HAS, CFG } from "./_lib/core.js";
 import { pingDb } from "./_lib/db.js";
 import { pingNotify } from "./_lib/notify.js";
+import { pingTelegram } from "./_lib/telegram.js";
+import { anyoneAvailable } from "./_lib/live.js";
 
 export default async function handler(req, res) {
   if (cors(req, res)) return;
   if (methodGuard(req, res, "GET")) return;
 
-  const [db, notify] = await Promise.all([
+  const [db, notify, tg, presence] = await Promise.all([
     pingDb().catch((e) => ({ ok: false, error: e.message })),
-    pingNotify().catch((e) => ({ error: e.message }))
+    pingNotify().catch((e) => ({ error: e.message })),
+    pingTelegram().catch((e) => ({ configured: HAS.telegram, error: e.message })),
+    anyoneAvailable().catch(() => ({ available: false }))
   ]);
 
   const checks = {
@@ -27,6 +31,12 @@ export default async function handler(req, res) {
     email:     notify.email || { configured: HAS.email },
     assistant: { configured: HAS.claude },
     admin:     { configured: HAS.admin },
+    liveChat:  {
+      configured: HAS.telegram && HAS.db,
+      telegram: tg,
+      operatorAvailable: presence.available === true,
+      operators: (presence.operators || []).map((o) => o.name).filter(Boolean)
+    },
     cors:      { allowlist: CFG.origins.length ? CFG.origins : "same-origin only" }
   };
 

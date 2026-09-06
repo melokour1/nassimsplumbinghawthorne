@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Live chat — Nassim's Plumbing</title>
+<link rel="icon" href="assets/mark.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ##### SECTION: CONSOLE / STYLES ##### */
+:root{
+  --ink:#050d1c; --card:#0a1526; --panel:#08111f; --line:rgba(140,175,225,.16);
+  --steel:#8ea3c4; --mist:#c3d3ea; --white:#f2f7ff; --aqua:#3fe0d0; --amber:#ffc24a; --red:#ff7a7a;
+  --sans:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--ink);color:var(--mist);font-family:var(--sans);font-size:15px}
+button,input,textarea{font-family:var(--sans);font-size:14px}
+[hidden]{display:none!important}
+
+/* gate */
+#gate{max-width:420px;margin:14vh auto;padding:32px;background:var(--card);border:1px solid var(--line);border-radius:18px}
+#gate h1{font-size:20px;margin:0 0 8px;color:var(--white)}
+#gate p{margin:0 0 22px;color:var(--steel);font-size:14px}
+#gate input{width:100%;padding:13px 15px;border-radius:11px;background:#07101f;color:var(--white);border:1px solid var(--line);margin-bottom:14px}
+#gate input:focus{outline:none;border-color:rgba(63,224,208,.7)}
+#gateErr{color:var(--red);font-size:13px;min-height:20px}
+.btn{padding:10px 17px;border-radius:999px;border:1px solid var(--line);background:none;color:var(--white);cursor:pointer;transition:.25s}
+.btn:hover{border-color:rgba(63,224,208,.6);background:rgba(63,224,208,.08)}
+.btn.primary{background:var(--aqua);color:#04121d;border-color:transparent;font-weight:600}
+
+/* shell */
+#app{display:grid;grid-template-rows:auto 1fr;height:100%}
+.top{
+  display:flex;align-items:center;gap:14px;padding:12px 20px;
+  border-bottom:1px solid var(--line);background:var(--card);flex-wrap:wrap;
+}
+.top .chip{width:36px;height:36px;border-radius:10px;background:#fff;display:grid;place-items:center;padding:5px}
+.top .chip img{width:100%}
+.top h1{font-size:16px;margin:0;color:var(--white);font-weight:600;flex:1}
+.presence{display:flex;align-items:center;gap:10px}
+.dot{width:9px;height:9px;border-radius:50%;background:#54607a}
+.dot.on{background:var(--aqua);box-shadow:0 0 0 4px rgba(63,224,208,.18)}
+.presence label{font-size:13px;color:var(--steel);cursor:pointer;user-select:none}
+
+.cols{display:grid;grid-template-columns:320px 1fr;min-height:0}
+@media (max-width:800px){ .cols{grid-template-columns:1fr} .thread-wrap{display:none} .cols.open .list{display:none} .cols.open .thread-wrap{display:grid} }
+
+/* list */
+.list{border-right:1px solid var(--line);overflow-y:auto;min-height:0}
+.conv{padding:14px 18px;border-bottom:1px solid var(--line);cursor:pointer;transition:background .2s}
+.conv:hover{background:#0c1a2e}
+.conv.sel{background:#102340}
+.conv .row1{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.conv b{color:var(--white);font-size:14px;font-weight:600}
+.conv .st{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase}
+.conv .st.waiting{color:var(--amber)}
+.conv .st.live{color:var(--aqua)}
+.conv p{margin:6px 0 0;font-size:13px;color:var(--steel);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty{padding:40px 20px;text-align:center;color:var(--steel);font-size:14px}
+
+/* thread */
+.thread-wrap{display:grid;grid-template-rows:auto 1fr auto;min-height:0}
+.thead{padding:13px 20px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:center}
+.thead b{color:var(--white);font-size:15px;flex:1}
+.thread{overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:11px;min-height:0}
+.m{max-width:70%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.m.customer{align-self:flex-start;background:#10203a;border-bottom-left-radius:5px}
+.m.operator{align-self:flex-end;background:var(--aqua);color:#04121d;border-bottom-right-radius:5px}
+.m.system{align-self:center;background:none;color:var(--steel);font-size:12px;max-width:100%}
+.m .who{display:block;font-size:10.5px;opacity:.7;margin-bottom:3px;letter-spacing:.06em}
+.compose{display:flex;gap:10px;padding:14px 20px;border-top:1px solid var(--line);background:var(--card)}
+.compose textarea{
+  flex:1;resize:none;height:44px;max-height:120px;padding:12px 15px;border-radius:12px;
+  background:#07101f;color:var(--white);border:1px solid var(--line);line-height:1.4;
+}
+.compose textarea:focus{outline:none;border-color:rgba(63,224,208,.7)}
+.pick{display:grid;place-items:center;color:var(--steel);text-align:center;padding:40px}
+</style>
+</head>
+<body>
+
+<!-- ##### SECTION: CONSOLE / GATE ##### -->
+<div id="gate">
+  <h1>Live chat console</h1>
+  <p>Enter the admin token. Stored on this device only.</p>
+  <input id="token" type="password" placeholder="Admin token" autocomplete="current-password">
+  <div id="gateErr"></div>
+  <button class="btn primary" id="unlock" style="width:100%">Unlock</button>
+</div>
+
+<!-- ##### SECTION: CONSOLE / APP ##### -->
+<div id="app" hidden>
+  <div class="top">
+    <span class="chip"><img src="assets/mark.png" alt=""></span>
+    <h1>Live chat</h1>
+    <div class="presence">
+      <span class="dot" id="dot"></span>
+      <label><input type="checkbox" id="avail"> Available for live chat</label>
+    </div>
+    <a class="btn" href="admin.html">Leads</a>
+    <button class="btn" id="lock">Lock</button>
+  </div>
+
+  <div class="cols" id="cols">
+    <div class="list" id="list"></div>
+    <div class="thread-wrap">
+      <div class="thead">
+        <button class="btn" id="back" hidden style="padding:6px 12px">&larr;</button>
+        <b id="who">Pick a conversation</b>
+        <button class="btn" id="close" hidden>Close chat</button>
+      </div>
+      <div class="thread" id="thread"><div class="pick">Waiting conversations appear on the left.</div></div>
+      <div class="compose" hidden id="compose">
+        <textarea id="msg" placeholder="Type a reply…" rows="1"></textarea>
+        <button class="btn primary" id="send">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   ##### SECTION: CONSOLE / SCRIPT #####
+   Polls /api/operator. Same message store the Telegram bot writes to, so
+   a reply typed here and one typed in Telegram are the same thing to the
+   customer.
+   ===================================================================== */
+(function(){
+'use strict';
+
+var KEY = 'np_admin_token';
+var token = '';
+try { token = localStorage.getItem(KEY) || ''; } catch(e){}
+
+var el = function(id){ return document.getElementById(id); };
+var current = null, lastId = 0, listTimer = null, threadTimer = null;
+
+function esc(s){
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function ago(iso){
+  if(!iso) return '';
+  var s = (Date.now() - new Date(iso)) / 1000;
+  if(s < 60) return 'now';
+  if(s < 3600) return Math.floor(s/60) + 'm';
+  if(s < 86400) return Math.floor(s/3600) + 'h';
+  return Math.floor(s/86400) + 'd';
+}
+
+function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({ Authorization: 'Bearer ' + token }, opts.headers || {});
+  return fetch('/api/operator' + path, opts).then(function(r){
+    return r.json().catch(function(){ return {}; }).then(function(j){
+      if(r.status === 401) throw Object.assign(new Error('unauthorised'), { auth: true });
+      if(!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      return j;
+    });
+  });
+}
+
+/* ##### SECTION: CONSOLE / LIST ##### */
+function loadList(){
+  return api('?action=list').then(function(j){
+    el('avail').checked = !!j.available;
+    el('dot').className = 'dot' + (j.available ? ' on' : '');
+
+    var rows = j.conversations || [];
+    if(!rows.length){
+      el('list').innerHTML = '<div class="empty">Nobody waiting.<br><br>Turn on <b>Available</b> so the website starts offering live chat.</div>';
+      return;
+    }
+    el('list').innerHTML = rows.map(function(c){
+      return '<div class="conv' + (c.id === current ? ' sel' : '') + '" data-id="' + esc(c.id) + '">' +
+        '<div class="row1">' +
+          '<b>' + esc(c.city || 'Website visitor') + '</b>' +
+          '<span class="st ' + esc(c.live_status) + '">' + esc(c.live_status) + ' · ' + esc(ago(c.awaiting_since || c.created_at)) + '</span>' +
+        '</div>' +
+        '<p>' + esc(c.summary || 'No summary') + '</p>' +
+      '</div>';
+    }).join('');
+  }).catch(function(err){
+    if(err.auth) lock('Token rejected.');
+  });
+}
+
+/* ##### SECTION: CONSOLE / THREAD ##### */
+function openThread(id){
+  current = id; lastId = 0;
+  el('thread').innerHTML = '';
+  el('compose').hidden = false;
+  el('close').hidden = false;
+  el('back').hidden = window.innerWidth > 800;
+  el('cols').classList.add('open');
+  loadThread(true);
+  loadList();
+}
+
+function loadThread(reset){
+  if(!current) return Promise.resolve();
+  return api('?action=thread&c=' + encodeURIComponent(current) + '&after=' + lastId).then(function(j){
+    var c = j.conversation;
+    if(c) el('who').textContent = (c.city || 'Website visitor') + (c.live_status === 'closed' ? ' — closed' : '');
+    (j.messages || []).forEach(function(m){
+      lastId = Math.max(lastId, m.id);
+      var d = document.createElement('div');
+      d.className = 'm ' + m.role;
+      d.innerHTML = (m.role === 'operator' && m.operator_name
+        ? '<span class="who">' + esc(m.operator_name) + '</span>' : '') + esc(m.body);
+      el('thread').appendChild(d);
+    });
+    if((j.messages || []).length || reset) el('thread').scrollTop = el('thread').scrollHeight;
+  }).catch(function(err){ if(err.auth) lock('Token rejected.'); });
+}
+
+function send(){
+  var box = el('msg');
+  var text = box.value.trim();
+  if(!text || !current) return;
+  box.value = '';
+  box.style.height = '44px';
+  api('', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'reply', conversationId: current, body: text, name: "Nassim's Plumbing" })
+  }).then(function(){ loadThread(); })
+    .catch(function(){ box.value = text; });
+}
+
+/* ##### SECTION: CONSOLE / EVENTS ##### */
+el('list').addEventListener('click', function(e){
+  var c = e.target.closest('.conv');
+  if(c) openThread(c.getAttribute('data-id'));
+});
+el('send').addEventListener('click', send);
+el('msg').addEventListener('keydown', function(e){
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); send(); }
+});
+el('msg').addEventListener('input', function(){
+  this.style.height = '44px';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+el('back').addEventListener('click', function(){
+  current = null;
+  el('cols').classList.remove('open');
+  el('compose').hidden = true;
+  el('close').hidden = true;
+});
+el('close').addEventListener('click', function(){
+  if(!current) return;
+  api('', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'close', conversationId: current })
+  }).then(function(){ loadThread(); loadList(); });
+});
+el('avail').addEventListener('change', function(){
+  var on = this.checked;
+  el('dot').className = 'dot' + (on ? ' on' : '');
+  api('', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'presence', available: on, name: 'Console' })
+  }).catch(function(){ el('avail').checked = !on; });
+});
+
+/* ##### SECTION: CONSOLE / SESSION ##### */
+function start(){
+  el('gate').hidden = true;
+  el('app').hidden = false;
+  loadList();
+  listTimer = setInterval(loadList, 5000);
+  threadTimer = setInterval(function(){ loadThread(); }, 3000);
+}
+function lock(message){
+  clearInterval(listTimer); clearInterval(threadTimer);
+  try { localStorage.removeItem(KEY); } catch(e){}
+  token = ''; current = null;
+  el('app').hidden = true;
+  el('gate').hidden = false;
+  el('gateErr').textContent = message || '';
+}
+
+el('unlock').addEventListener('click', function(){
+  var v = el('token').value.trim();
+  if(!v){ el('gateErr').textContent = 'Enter the token.'; return; }
+  token = v;
+  try { localStorage.setItem(KEY, v); } catch(e){}
+  el('gateErr').textContent = '';
+  start();
+});
+el('token').addEventListener('keydown', function(e){ if(e.key === 'Enter') el('unlock').click(); });
+el('lock').addEventListener('click', function(){ lock(); });
+
+if(token) start();
+
+})();
+</script>
+</body>
+</html>

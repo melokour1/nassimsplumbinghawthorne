@@ -44,16 +44,28 @@ export const CFG = {
     email: process.env.LEAD_EMAIL_TO || ""
   },
 
+  /* Operator channel for the live handoff. Free, threads properly, and
+     runs on the owner's desktop as well as their phone. */
+  telegram: {
+    token:          process.env.TELEGRAM_BOT_TOKEN || "",
+    chatId:         process.env.TELEGRAM_CHAT_ID || "",
+    webhookSecret:  process.env.TELEGRAM_WEBHOOK_SECRET || ""
+  },
+
   adminToken: process.env.ADMIN_TOKEN || "",
   anthropicKey: process.env.ANTHROPIC_API_KEY || ""
 };
 
 export const HAS = {
-  db:     Boolean(CFG.supabase.url && CFG.supabase.key),
-  sms:    Boolean(CFG.twilio.sid && CFG.twilio.token && CFG.twilio.from && CFG.ops.sms),
-  email:  Boolean(CFG.resend.key && CFG.resend.from && CFG.resend.to),
-  claude: Boolean(CFG.anthropicKey),
-  admin:  Boolean(CFG.adminToken)
+  db:       Boolean(CFG.supabase.url && CFG.supabase.key),
+  sms:      Boolean(CFG.twilio.sid && CFG.twilio.token && CFG.twilio.from && CFG.ops.sms),
+  email:    Boolean(CFG.resend.key && CFG.resend.from && CFG.resend.to),
+  claude:   Boolean(CFG.anthropicKey),
+  admin:    Boolean(CFG.adminToken),
+  telegram: Boolean(CFG.telegram.token && CFG.telegram.chatId),
+  /* Live chat needs somewhere to store turns AND somewhere to route them. */
+  live:     Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY &&
+                    (process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_TOKEN))
 };
 
 /* ##### SECTION: CORE / HTTP ##### */

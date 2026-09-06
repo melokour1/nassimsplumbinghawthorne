@@ -103,3 +103,61 @@ revoke all on public.leads_open    from anon, authenticated;
 revoke all on public.leads         from anon, authenticated;
 revoke all on public.conversations from anon, authenticated;
 revoke all on public.events        from anon, authenticated;
+
+-- =====================================================================
+-- ##### SECTION: SCHEMA / LIVE HANDOFF #####
+-- A message store in the middle, with the operator channel pluggable.
+-- Telegram and the web console both read and write these rows, so the
+-- customer sees one thread whichever the operator is using.
+-- =====================================================================
+
+alter table public.conversations
+  add column if not exists live_status      text        not null default 'bot',
+  add column if not exists awaiting_since   timestamptz,
+  add column if not exists last_operator_at timestamptz,
+  add column if not exists last_customer_at timestamptz,
+  add column if not exists operator_name    text,
+  add column if not exists city             text;
+
+alter table public.conversations drop constraint if exists conversations_live_status_check;
+alter table public.conversations add constraint conversations_live_status_check
+  check (live_status in ('bot','waiting','live','closed'));
+
+create index if not exists conversations_live_idx
+  on public.conversations (live_status, awaiting_since desc)
+  where live_status in ('waiting','live');
+
+create table if not exists public.messages (
+  id              bigserial primary key,
+  conversation_id uuid not null,
+  role            text not null check (role in ('customer','operator','system')),
+  body            text not null,
+  operator_name   text,
+  created_at      timestamptz not null default now()
+);
+create index if not exists messages_convo_idx on public.messages (conversation_id, id);
+
+-- Maps a Telegram message back to its conversation, so the operator can
+-- hit reply on any forwarded message and land in the right thread.
+create table if not exists public.telegram_links (
+  message_id      bigint primary key,
+  conversation_id uuid not null,
+  created_at      timestamptz not null default now()
+);
+create index if not exists telegram_links_convo_idx on public.telegram_links (conversation_id);
+
+-- Who is on, so the widget never offers live chat into an empty room.
+create table if not exists public.operators (
+  id         text primary key,
+  name       text,
+  available  boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.messages       enable row level security;
+alter table public.telegram_links enable row level security;
+alter table public.operators      enable row level security;
+
+revoke all on public.messages       from anon, authenticated;
+revoke all on public.telegram_links from anon, authenticated;
+revoke all on public.operators      from anon, authenticated;

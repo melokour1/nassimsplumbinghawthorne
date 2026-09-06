@@ -20,6 +20,9 @@ import {
 } from "./_lib/core.js";
 import { saveConversation, recordEvent } from "./_lib/db.js";
 import { notifyEscalation } from "./_lib/notify.js";
+import { anyoneAvailable, patchConversation } from "./_lib/live.js";
+import { sendToOps, handoffCard } from "./_lib/telegram.js";
+import { signConversation } from "./_lib/session.js";
 
 const REASONS = ["asked_for_human", "emergency", "pricing", "scheduling", "out_of_scope", "frustrated", "unknown"];
 
@@ -57,6 +60,7 @@ export default async function handler(req, res) {
     reason: REASONS.includes(body.reason) ? body.reason : "unknown",
     summary: typeof body.summary === "string" ? body.summary.slice(0, 600) : "",
     page: typeof body.page === "string" ? body.page.slice(0, 200) : "",
+    city: typeof body.city === "string" ? body.city.trim().slice(0, 60) : "",
     transcript
   };
 
@@ -65,6 +69,13 @@ export default async function handler(req, res) {
   const conversationId =
     (typeof body.conversationId === "string" && body.conversationId.slice(0, 64)) ||
     crypto.randomUUID();
+
+  /* ##### SECTION: ESCALATE / LIVE OR CALLBACK ##### */
+  /* Live chat is only offered when someone has actually said they are
+     watching. An unanswered chat window is worse than never offering
+     one, so presence is checked rather than assumed. */
+  const presence = await anyoneAvailable().catch(() => ({ available: false }));
+  const goLive = Boolean(presence.available && HAS.telegram);
 
   /* ##### SECTION: ESCALATE / FILE + ALERT ##### */
   const [saved, told] = await Promise.all([
@@ -78,6 +89,30 @@ export default async function handler(req, res) {
     }).catch((e) => ({ ok: false, error: e.message })),
     notifyEscalation(data).catch((e) => ({ ok: false, error: e.message }))
   ]);
+
+  /* Open the live thread in the operator channel and mark the
+     conversation as waiting, which starts the widget's countdown. */
+  let liveOpened = false;
+  if (goLive) {
+    const card = await sendToOps(conversationId, handoffCard({
+      conversationId,
+      summary: data.summary,
+      transcript,
+      page: data.page,
+      city: data.city,
+      phone: data.phone_display || data.phone,
+      reason: data.reason
+    })).catch(() => ({ ok: false }));
+
+    if (card.ok) {
+      liveOpened = true;
+      await patchConversation(conversationId, {
+        live_status: "waiting",
+        awaiting_since: new Date().toISOString(),
+        city: data.city || null
+      }).catch(() => {});
+    }
+  }
 
   log("escalation", {
     ipHash,
@@ -96,24 +131,35 @@ export default async function handler(req, res) {
     saved: saved.ok, notified: told.ok
   }).catch(() => {});
 
-  const alerted = Boolean(told.ok);
+  const alerted = Boolean(told.ok) || liveOpened;
 
+  log("escalation.mode", { conversationId, liveOpened, available: presence.available, alerted });
+
+  /* Live chat gets a signed token so the widget can read and write this
+     conversation. The id alone is deliberately not enough. */
   return json(res, 200, {
     ok: true,
     conversationId,
+    live: liveOpened,
+    token: liveOpened ? signConversation(conversationId) : null,
+
     /* Whether a person has actually been pinged, so the widget can be
        honest instead of promising a callback nobody was told about. */
     alerted,
     /* Ask for a number when we do not have one -- an escalation without
        a callback number is the most common way these go nowhere. */
-    needsPhone: !phone,
-    message: alerted
-      ? (phone
-          ? "Done — someone has been sent your number and what we talked about. Expect a call shortly."
-          : "Someone has been alerted. Leave a number and they will call you back, or call now and skip the wait.")
-      : `Call ${CFG.biz.phone} and someone will pick up.`,
+    needsPhone: !phone && !liveOpened,
+
+    message: liveOpened
+      ? "Connecting you to someone now — hang on a moment."
+      : alerted
+        ? (phone
+            ? "Done — someone has been sent your number and what we talked about. Expect a call shortly."
+            : "Someone has been alerted. Leave a number and they will call you back, or call now and skip the wait.")
+        : `Call ${CFG.biz.phone} and someone will pick up.`,
+
     phone: CFG.biz.phone,
     tel: CFG.biz.tel,
-    configured: { db: HAS.db, sms: HAS.sms, email: HAS.email }
+    configured: { db: HAS.db, sms: HAS.sms, email: HAS.email, telegram: HAS.telegram }
   });
 }
