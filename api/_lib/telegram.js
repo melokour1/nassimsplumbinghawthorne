@@ -113,12 +113,36 @@ export function getWebhookInfo() {
 
 /* ##### SECTION: TELEGRAM / HEALTH ##### */
 export async function pingTelegram() {
-  if (!HAS.telegram) return { configured: false };
+  if (!CFG.telegram.token) return { configured: false };
   const r = await call("getMe", {});
   return {
     configured: true,
     reachable: r.ok,
     bot: r.ok ? r.result?.username : undefined,
-    reason: r.ok ? undefined : r.reason
+    reason: r.ok ? undefined : r.reason,
+    /* Telegram's own wording -- "Unauthorized" means a dead or wrong
+       token, which is a different fix from a network failure. */
+    description: r.ok ? undefined : r.description
+  };
+}
+
+/* ##### SECTION: TELEGRAM / TOKEN SHAPE #####
+   Describes the configured token without revealing it. Most setup
+   failures are a truncated paste, a stray newline, or the old token
+   left in place after revoking -- all visible from the shape alone. */
+export function tokenShape() {
+  const raw = process.env.TELEGRAM_BOT_TOKEN || "";
+  const t = raw.trim();
+  const m = /^(\d+):([A-Za-z0-9_-]+)$/.exec(t);
+  return {
+    length: t.length,
+    hasSurroundingWhitespace: raw !== t,
+    hasInternalWhitespace: /\s/.test(t),
+    looksLikeToken: Boolean(m),
+    botId: m ? m[1] : null,          /* public half; safe to show */
+    secretLength: m ? m[2].length : 0,
+    startsWith: t.slice(0, 4),
+    /* A healthy token is <8-10 digits>:<35 chars>, about 46 total. */
+    expected: "<bot id digits>:<35 characters>"
   };
 }

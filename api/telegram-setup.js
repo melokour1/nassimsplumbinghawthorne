@@ -12,7 +12,7 @@
    ===================================================================== */
 
 import { cors, methodGuard, json, clientIp, rateLimit, log, HAS, CFG } from "./_lib/core.js";
-import { getWebhookInfo, setWebhook, pingTelegram } from "./_lib/telegram.js";
+import { getWebhookInfo, setWebhook, pingTelegram, tokenShape } from "./_lib/telegram.js";
 
 export default async function handler(req, res) {
   if (cors(req, res)) return;
@@ -40,10 +40,34 @@ export default async function handler(req, res) {
 
   const bot = await pingTelegram();
   if (!bot.reachable) {
+    const shape = tokenShape();
+
+    /* Point at the specific cause rather than a generic rejection --
+       nearly every case is one of these four. */
+    let likely;
+    if (shape.hasSurroundingWhitespace || shape.hasInternalWhitespace) {
+      likely = "The value has whitespace in it. Re-paste it with no spaces or line breaks.";
+    } else if (!shape.looksLikeToken) {
+      likely = `That does not look like a bot token. It should be ${shape.expected}, around 46 characters. Yours is ${shape.length}.`;
+    } else if (shape.secretLength < 30) {
+      likely = `The token looks truncated -- the half after the colon is ${shape.secretLength} characters, expected about 35.`;
+    } else if (bot.description === "Unauthorized") {
+      likely = "Telegram says Unauthorized, so the token is well-formed but dead. Almost always this is the OLD token still in Vercel after revoking in @BotFather. Copy the new one from BotFather.";
+    } else {
+      likely = "The token is well-formed but Telegram will not accept it.";
+    }
+
     return json(res, 200, {
       ok: false,
       problem: "Telegram rejected the bot token.",
-      next: "Check TELEGRAM_BOT_TOKEN is the current one. Revoking in @BotFather invalidates the old token."
+      telegramSaid: bot.description || null,
+      likely,
+      tokenShape: shape,   /* never the token itself */
+      alsoCheck: [
+        "Vercel applies environment variables at build time -- after changing one you must Redeploy, not just save.",
+        "Make sure the variable is ticked for the Production environment.",
+        "Confirm you are reading this on the deployment that has the variable set."
+      ]
     });
   }
 
