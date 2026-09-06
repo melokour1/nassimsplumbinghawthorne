@@ -90,3 +90,16 @@ create or replace view public.leads_open as
   order by
     case when urgency ilike 'emergency%' then 0 else 1 end,
     created_at desc;
+
+-- ##### SECTION: SCHEMA / VIEW HARDENING #####
+-- A view is SECURITY DEFINER by default, meaning it runs as its creator and
+-- therefore bypasses the RLS above -- which would hand customer names and
+-- phone numbers to the anon role through PostgREST. security_invoker makes
+-- the view respect the caller's own permissions instead.
+alter view public.leads_open set (security_invoker = on);
+
+-- Belt and braces: the API roles have no business touching these at all.
+revoke all on public.leads_open    from anon, authenticated;
+revoke all on public.leads         from anon, authenticated;
+revoke all on public.conversations from anon, authenticated;
+revoke all on public.events        from anon, authenticated;
