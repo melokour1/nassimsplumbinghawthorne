@@ -69,9 +69,14 @@ async function sendEmail(subject, html, replyTo) {
     }), TIMEOUT, "resend");
 
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      log("email.failed", { status: res.status, detail: detail.slice(0, 200) });
-      return { ok: false, reason: "provider_error", status: res.status };
+      const raw = await res.text().catch(() => "");
+      let description = raw.slice(0, 300);
+      /* Resend explains the actual problem in the body -- an unverified
+         domain, a rejected From, a bad recipient. Surfacing it is the
+         difference between a fixable error and a shrug. */
+      try { description = JSON.parse(raw).message || description; } catch {}
+      log("email.failed", { status: res.status, detail: description.slice(0, 200) });
+      return { ok: false, reason: "provider_error", status: res.status, description };
     }
     log("email.sent", {});
     return { ok: true };
