@@ -18,7 +18,10 @@ const API = (method) => `https://api.telegram.org/bot${CFG.telegram.token}/${met
 
 /* ##### SECTION: TELEGRAM / SEND ##### */
 async function call(method, payload) {
-  if (!HAS.telegram) return { ok: false, reason: "not_configured" };
+  /* Only the token is needed to send. Requiring the chat id here too
+     made setup circular: the bot could not tell you your chat id until
+     the chat id was already configured. */
+  if (!CFG.telegram.token) return { ok: false, reason: "not_configured" };
   try {
     const res = await withTimeout(fetch(API(method), {
       method: "POST",

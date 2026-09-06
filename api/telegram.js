@@ -41,7 +41,8 @@ export default async function handler(req, res) {
     }
   }
 
-  if (!HAS.telegram) return json(res, 200, { ok: true, skipped: "not_configured" });
+  /* No token at all: nothing to do and nothing we could reply with. */
+  if (!CFG.telegram.token) return json(res, 200, { ok: true, skipped: "no_token" });
 
   try {
     const update = await readBody(req);
@@ -49,6 +50,21 @@ export default async function handler(req, res) {
     if (!msg || typeof msg.text !== "string") return json(res, 200, { ok: true });
 
     const chatId = msg.chat?.id;
+
+    /* ##### SECTION: TELEGRAM / BOOTSTRAP #####
+       Token set but no TELEGRAM_CHAT_ID yet. This is the only way to
+       find out what the chat id actually is, so answer it rather than
+       going silent -- otherwise setup has no starting point. */
+    if (!CFG.telegram.chatId) {
+      log("telegram.bootstrap", { chatId: String(chatId) });
+      await replyTo(chatId,
+        `👋 <b>Bot is connected.</b>\n\n` +
+        `One thing left. Add this as <code>TELEGRAM_CHAT_ID</code> in Vercel, then redeploy:\n\n` +
+        `<code>${chatId}</code>\n\n` +
+        `<i>Tap the number to copy it.</i>\n\n` +
+        `After the redeploy, send /available and the website will start offering live chat.`);
+      return json(res, 200, { ok: true, bootstrap: true });
+    }
     const from = msg.from || {};
     const operatorName = [from.first_name, from.last_name].filter(Boolean).join(" ") || from.username || "Nassim's Plumbing";
     const text = msg.text.trim();
