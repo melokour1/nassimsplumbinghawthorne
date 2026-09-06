@@ -1,28 +1,32 @@
 /* =====================================================================
    POST /api/chat  --  the Claude side of the website assistant.
-   ---------------------------------------------------------------------
-   Deploy target: any Node serverless host (Vercel / Netlify Functions /
-   Cloudflare Node compat). The browser never sees ANTHROPIC_API_KEY --
-   it only ever talks to this endpoint.
 
-     npm install
-     ANTHROPIC_API_KEY=sk-ant-...   (set as an environment variable)
+   The browser never sees ANTHROPIC_API_KEY; it only ever talks here.
 
-   Then point the widget at it, before assets/chat.js loads:
+   The model has two tools and both have real consequences:
+     connect_to_human -> files the transcript and pings the owner's phone
+     start_booking    -> opens the booking form prefilled
 
-     <script>window.NP = { chatEndpoint: "/api/chat" };</script>
+   Every failure path ends somewhere useful. A rate limit, a refusal, a
+   dead API key and a network blip all resolve to "here is how to reach a
+   person" rather than a spinner or a stack trace.
 
-   Request   { messages: [{role, content}], page: {title, url} }
-   Response  { reply, handoff?, handoffMessage?, book?, chips? }
+   Request   { messages:[{role,content}], page:{title,url}, conversationId? }
+   Response  { reply, handoff?, handoffMessage?, book?, conversationId, alerted? }
    ===================================================================== */
 
 import Anthropic from "@anthropic-ai/sdk";
-
-const client = new Anthropic();
+import {
+  cors, methodGuard, json, readBody, clientIp, hashIp, rateLimit,
+  withTimeout, log, HAS, CFG
+} from "./_lib/core.js";
+import { saveConversation, recordEvent } from "./_lib/db.js";
+import { notifyEscalation } from "./_lib/notify.js";
 
 const MODEL = "claude-opus-5";
+const client = HAS.claude ? new Anthropic() : null;
 
-/* ##### SECTION: API / BUSINESS FACTS ##### */
+/* ##### SECTION: CHAT / BUSINESS FACTS ##### */
 /* Everything the assistant is allowed to treat as true. If it is not in
    here, it does not know it -- which is the point. */
 const FACTS = `
@@ -63,30 +67,30 @@ ${FACTS}
 
 HOW TO TALK
 - Plain, calm, direct. Short paragraphs. Two or three sentences is usually enough.
-- Ask one question at a time. The single most useful question early on is the one that splits the problem in half (one fixture or several? repair or replacement? how long has it been doing it?).
+- Ask one question at a time. The most useful early question is the one that splits the problem in half (one fixture or several? repair or replacement? how long has it been doing it?).
 - Never pad with pleasantries or restate what they just told you.
-- British-plain register: no exclamation marks, no "Great question", no emoji.
+- No exclamation marks, no "Great question", no emoji.
 
 HARD RULES
-- NEVER quote, estimate, or hint at a price, a price range, or an hourly rate. Not even "usually a few hundred". Say that the number comes from whoever looks at the job and that it is given flat and in writing before work starts.
-- NEVER promise an arrival time, a same-day slot, or a specific technician. You do not have the schedule. Offer to get them booked and let a person confirm the window.
+- NEVER quote, estimate, or hint at a price, a price range, or an hourly rate. Not even "usually a few hundred". Say the number comes from whoever looks at the job and is given flat and in writing before work starts.
+- NEVER promise an arrival time, a same-day slot, or a specific technician. You do not have the schedule.
 - NEVER diagnose with certainty. Say what a symptom usually means, then say it needs eyes on it.
-- NEVER invent facts about the business: no years in trade, no review counts, no staff names, no warranty terms, no financing. If asked something not in the facts above, say you do not know and offer to connect them.
-- Do not give DIY repair instructions beyond genuinely safe first steps: where the shut-off is, turning off the water, turning off the water heater, leaving the building for a gas smell.
+- NEVER invent facts about the business: no years in trade, no review counts, no staff names, no warranty terms, no financing. If asked something not in the facts above, say you do not know and connect them.
+- No DIY repair instructions beyond genuinely safe first steps: where the shut-off is, turning off the water, turning off the water heater, leaving the building for a gas smell.
 - If someone mentions smelling gas, tell them to leave the building and call the gas utility from outside first, then call us. Do this before anything else.
 
 TOOLS
-- connect_to_human: call this the moment someone asks for a person, gets frustrated, has an active emergency, or asks something you are not allowed to answer (price, scheduling, anything outside the facts). Do not talk them out of it and do not ask why. Prefer handing off early over guessing.
+- connect_to_human: call this the moment someone asks for a person, gets frustrated, has an active emergency, or asks something you are not allowed to answer (price, scheduling, anything outside the facts). Do not talk them out of it and do not ask why. Prefer handing off early over guessing. If you have their name and number, pass them -- an escalation without a callback number usually goes nowhere.
 - start_booking: call this once you know roughly what the job is and they are willing to book. It opens a short form on the page. Pass whatever you already know so they do not retype it.
 
 You may call a tool and say something in the same turn. Keep what you say short when you do.`;
 
-/* ##### SECTION: API / TOOLS ##### */
+/* ##### SECTION: CHAT / TOOLS ##### */
 const tools = [
   {
     name: "connect_to_human",
     description:
-      "Hand the conversation to a real person at Nassim's Plumbing. Call this when the visitor asks for a human, seems frustrated, describes an active emergency, or asks something outside what you are allowed to answer (prices, scheduling, anything not in the business facts).",
+      "Hand the conversation to a real person at Nassim's Plumbing. Call when the visitor asks for a human, seems frustrated, describes an active emergency, or asks something outside what you may answer (prices, scheduling, anything not in the business facts).",
     strict: true,
     input_schema: {
       type: "object",
@@ -98,23 +102,25 @@ const tools = [
         },
         summary: {
           type: "string",
-          description: "One sentence a person could read to pick up the conversation cold."
-        }
+          description: "One or two sentences a person could read to pick this up cold."
+        },
+        name:  { type: "string", description: "Their name if given, else an empty string." },
+        phone: { type: "string", description: "Their phone if given, else an empty string." }
       },
-      required: ["reason", "summary"],
+      required: ["reason", "summary", "name", "phone"],
       additionalProperties: false
     }
   },
   {
     name: "start_booking",
     description:
-      "Open the booking form on the page, prefilled with what is already known. Call this once the visitor has said enough to identify the job and is willing to book a visit.",
+      "Open the booking form on the page, prefilled with what is already known. Call once the visitor has said enough to identify the job and is willing to book a visit.",
     strict: true,
     input_schema: {
       type: "object",
       properties: {
         service: { type: "string", description: "Best-matching service, e.g. 'Water heater' or 'Drain cleaning'." },
-        city:    { type: "string", description: "City if they gave one, otherwise an empty string." },
+        city:    { type: "string", description: "City if given, else an empty string." },
         urgency: {
           type: "string",
           enum: ["Emergency - today if possible", "This week", "Next week or later", "Just getting a quote", ""],
@@ -128,52 +134,78 @@ const tools = [
   }
 ];
 
-/* ##### SECTION: API / HANDLER ##### */
+/* Fallback copy so a dead upstream still ends somewhere useful. */
+const TO_A_PERSON = `Easiest thing from here is a person — call or text ${CFG.biz.phone}.`;
+
+/* ##### SECTION: CHAT / HANDLER ##### */
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
-    return res.status(405).json({ error: "Method not allowed" });
+  if (cors(req, res)) return;
+  if (methodGuard(req, res, "POST")) return;
+
+  const ip = clientIp(req);
+  const ipHash = await hashIp(ip);
+
+  const rl = rateLimit(`chat:${ip}`, { limit: 30, windowMs: 5 * 60_000 });
+  if (!rl.ok) {
+    res.setHeader("Retry-After", String(rl.retryAfter));
+    return json(res, 200, { reply: `You have sent a lot of messages in a short time. ${TO_A_PERSON}`, handoff: true });
   }
 
+  if (!HAS.claude) {
+    /* No key configured. The widget drops to its offline assistant on a
+       non-2xx, which is the right behaviour -- say so plainly. */
+    log("chat.not_configured", {});
+    return json(res, 503, { error: "assistant_unavailable" });
+  }
+
+  const body = await readBody(req);
+  const { messages = [], page = {} } = body;
+  const conversationId =
+    (typeof body.conversationId === "string" && body.conversationId.slice(0, 64)) ||
+    crypto.randomUUID();
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return json(res, 400, { error: "messages_required" });
+  }
+
+  /* Visitor-supplied content: data, never instructions. */
+  const history = messages
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+    .slice(-24)
+    .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
+
+  if (history.length === 0 || history[0].role !== "user") {
+    return json(res, 400, { error: "conversation_must_start_with_user" });
+  }
+
+  const where = page.title
+    ? `The visitor is reading: ${String(page.title).slice(0, 160)} (${String(page.url || "/").slice(0, 120)})`
+    : "The visitor is on the website.";
+
   try {
-    const { messages = [], page = {} } = req.body || {};
+    const response = await withTimeout(
+      client.messages.create({
+        model: MODEL,
+        max_tokens: 1024,
+        system: [
+          { type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } },
+          { type: "text", text: where }
+        ],
+        tools,
+        messages: history
+      }),
+      25_000,
+      "anthropic"
+    );
 
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: "messages required" });
-    }
-
-    /* Trim to the recent window and drop anything malformed. Content is
-       visitor-supplied: treat it as data, never as instructions. */
-    const history = messages
-      .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-      .slice(-24)
-      .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
-
-    if (history.length === 0 || history[0].role !== "user") {
-      return res.status(400).json({ error: "conversation must start with a user message" });
-    }
-
-    const where = page.title
-      ? `The visitor is reading: ${String(page.title).slice(0, 160)} (${String(page.url || "/").slice(0, 120)})`
-      : "The visitor is on the website.";
-
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 1024,
-      system: [
-        { type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } },
-        { type: "text", text: where }
-      ],
-      tools,
-      messages: history
-    });
-
-    /* Safety classifiers declined the turn. Hand to a person rather than
-       showing the visitor an error. */
+    /* Safety classifiers declined the turn. Route to a person rather
+       than showing an error. */
     if (response.stop_reason === "refusal") {
-      return res.status(200).json({
+      log("chat.refusal", { ipHash, category: response.stop_details?.category });
+      await escalate({ conversationId, history, page, reason: "out_of_scope", summary: "Model declined the request." });
+      return json(res, 200, {
         reply: "Let me put you through to someone who can help with that.",
-        handoff: true
+        handoff: true, conversationId
       });
     }
 
@@ -181,6 +213,7 @@ export default async function handler(req, res) {
     let handoff = false;
     let handoffMessage = null;
     let book = null;
+    let escalation = null;
 
     for (const block of response.content) {
       if (block.type === "text") {
@@ -188,7 +221,8 @@ export default async function handler(req, res) {
       } else if (block.type === "tool_use") {
         if (block.name === "connect_to_human") {
           handoff = true;
-          handoffMessage = handoffCopy(block.input && block.input.reason);
+          escalation = block.input || {};
+          handoffMessage = handoffCopy(escalation.reason);
         } else if (block.name === "start_booking") {
           book = {
             service: block.input?.service || "",
@@ -200,35 +234,84 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.status(200).json({
+    const turns = [...history, { role: "assistant", content: reply || "(handed off)" }];
+
+    let alerted = false;
+    if (handoff) {
+      const r = await escalate({
+        conversationId, history: turns, page,
+        reason: escalation?.reason, summary: escalation?.summary,
+        name: escalation?.name, phone: escalation?.phone
+      });
+      alerted = r.alerted;
+    } else {
+      /* File the transcript as it grows so an escalation two turns later
+         has the whole thing, not just the tail. */
+      saveConversation({ id: conversationId, transcript: turns, page: page.url || "" }).catch(() => {});
+    }
+
+    log("chat.turn", {
+      ipHash, conversationId,
+      turns: history.length,
+      handoff, booked: Boolean(book), alerted,
+      in: response.usage?.input_tokens,
+      out: response.usage?.output_tokens,
+      cached: response.usage?.cache_read_input_tokens
+    });
+
+    return json(res, 200, {
       reply: reply.trim(),
-      handoff,
-      handoffMessage,
-      book
+      handoff, handoffMessage, book,
+      conversationId, alerted
     });
   } catch (err) {
-    /* Typed first, broad last -- retryable and non-retryable read differently. */
+    /* Most specific first. Every branch still leaves the visitor with a
+       way to reach a person. */
     if (err instanceof Anthropic.RateLimitError) {
-      console.error("chat: rate limited");
-      return res.status(200).json({
-        reply: "I am getting a lot of requests right now. Easiest thing is to call or text (310) 617-9503.",
-        handoff: true
-      });
+      log("chat.rate_limited_upstream", { ipHash });
+      return json(res, 200, { reply: `I am getting a lot of requests right now. ${TO_A_PERSON}`, handoff: true, conversationId });
     }
     if (err instanceof Anthropic.AuthenticationError) {
-      console.error("chat: ANTHROPIC_API_KEY missing or invalid");
-      return res.status(500).json({ error: "assistant unavailable" });
+      log("chat.bad_key", {});
+      return json(res, 503, { error: "assistant_unavailable" });
     }
     if (err instanceof Anthropic.APIError) {
-      console.error("chat: API error", err.status, err.message);
-      return res.status(502).json({ error: "assistant unavailable" });
+      log("chat.api_error", { status: err.status, msg: err.message });
+      return json(res, 200, { reply: `Something went wrong on my end. ${TO_A_PERSON}`, handoff: true, conversationId });
     }
-    console.error("chat:", err);
-    return res.status(500).json({ error: "assistant unavailable" });
+    log("chat.error", { msg: err.message });
+    return json(res, 200, { reply: `Something went wrong on my end. ${TO_A_PERSON}`, handoff: true, conversationId });
   }
 }
 
-/* What the visitor sees when the model decides to hand over. */
+/* ##### SECTION: CHAT / ESCALATION ##### */
+async function escalate({ conversationId, history, page, reason, summary, name, phone }) {
+  const data = {
+    name: name || "",
+    phone: phone || "",
+    phone_display: phone || "",
+    reason: reason || "unknown",
+    summary: summary || "",
+    page: page?.url || "",
+    transcript: history
+  };
+
+  const [, told] = await Promise.all([
+    saveConversation({
+      id: conversationId, transcript: history, page: data.page,
+      escalated: true, reason: data.reason, summary: data.summary
+    }).catch(() => ({ ok: false })),
+    notifyEscalation(data).catch(() => ({ ok: false }))
+  ]);
+
+  recordEvent("escalation", {
+    conversationId, reason: data.reason, via: "chat_tool",
+    hasPhone: Boolean(phone), notified: told.ok
+  }).catch(() => {});
+
+  return { alerted: Boolean(told.ok) };
+}
+
 function handoffCopy(reason) {
   switch (reason) {
     case "emergency":

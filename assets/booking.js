@@ -90,6 +90,11 @@ modal.innerHTML =
           '<input id="bkAddr" name="address" type="text" autocomplete="street-address"></div>' +
         '<div class="field"><label for="bkNotes">What is it doing?</label>' +
           '<textarea id="bkNotes" name="notes" placeholder="However it comes out is fine. Noises, smells, where the water is, when it started."></textarea></div>' +
+        /* Honeypot: hidden from people, irresistible to bots. */
+        '<div aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">' +
+          '<label for="bkCompany">Company</label>' +
+          '<input id="bkCompany" name="company" type="text" tabindex="-1" autocomplete="off">' +
+        '</div>' +
         '<div class="modal-actions">' +
           '<button class="btn btn-solid" type="submit">Send request</button>' +
           '<a class="btn btn-ghost" href="tel:' + PHONE_TEL + '">Call ' + PHONE_TEXT + '</a>' +
@@ -218,11 +223,11 @@ function smsHref(number, message){
   return 'sms:' + number + sep + 'body=' + encodeURIComponent(message);
 }
 
-function showDone(message){
+function showDone(title, message){
   body.innerHTML =
     '<div class="modal-done">' +
       '<div class="tick"><svg viewBox="0 0 24 24"><path d="M4 12.5l5.5 5.5L20 7"/></svg></div>' +
-      '<h2>Request ready to send</h2>' +
+      '<h2>' + title + '</h2>' +
       '<p class="sub" style="margin-bottom:26px">' + message + '</p>' +
       '<div class="modal-actions" style="justify-content:center">' +
         '<a class="btn btn-solid" href="tel:' + PHONE_TEL + '">Call ' + PHONE_TEXT + '</a>' +
@@ -232,6 +237,65 @@ function showDone(message){
   var c = body.querySelector('[data-close]');
   if(c) c.addEventListener('click', close);
 }
+
+/* ##### SECTION: BOOKING / NEVER LOSE A LEAD #####
+   The request is kept locally until the server confirms it. If the tab
+   dies mid-submit, or the API was down, the next page load retries it
+   quietly in the background. A job is worth more than a clean cache. */
+var PENDING_KEY = 'np_pending_lead';
+
+function stash(data){
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify({ data: data, at: Date.now() })); } catch(e){}
+}
+function unstash(){
+  try { localStorage.removeItem(PENDING_KEY); } catch(e){}
+}
+function retryPending(){
+  if(!ENDPOINT) return;
+  var raw;
+  try { raw = localStorage.getItem(PENDING_KEY); } catch(e){ return; }
+  if(!raw) return;
+  var saved;
+  try { saved = JSON.parse(raw); } catch(e){ unstash(); return; }
+  /* Anything older than a day is stale -- they will have called by now. */
+  if(!saved || !saved.data || Date.now() - saved.at > 864e5){ unstash(); return; }
+
+  post(saved.data).then(function(r){
+    if(r.ok || r.invalid) unstash();
+  }).catch(function(){});
+}
+
+/* One place that talks to the API, so the timeout and the idempotency
+   key behave the same on first try and on retry. */
+function post(data){
+  var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 9000) : null;
+
+  return fetch(ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Idempotency-Key': data.idempotencyKey
+    },
+    body: JSON.stringify(data),
+    signal: ctrl ? ctrl.signal : undefined
+  }).then(function(r){
+    if(timer) clearTimeout(timer);
+    return r.json().catch(function(){ return {}; }).then(function(j){
+      return { ok: r.ok && j.ok !== false, invalid: r.status === 400, status: r.status, body: j };
+    });
+  }).catch(function(err){
+    if(timer) clearTimeout(timer);
+    throw err;
+  });
+}
+
+function uid(){
+  try { return crypto.randomUUID(); }
+  catch(e){ return 'k' + Date.now() + Math.random().toString(36).slice(2); }
+}
+
+var openedAt = Date.now();
 
 form.addEventListener('submit', function(e){
   e.preventDefault();
@@ -247,32 +311,53 @@ form.addEventListener('submit', function(e){
     urgency: form.urgency.value,
     address: form.address.value.trim(),
     notes:   form.notes.value.trim(),
-    page:    document.title
+    page:    document.title,
+    referrer: document.referrer || '',
+    source:  'form',
+    company: form.company ? form.company.value : '',   /* honeypot */
+    elapsedMs: Date.now() - openedAt,
+    idempotencyKey: uid()
   };
   if(!validate(data, els)) return;
 
   var message = compose(data);
+  var btn = form.querySelector('button[type=submit]');
 
-  function handoff(){
+  /* The path that cannot fail: the customer's own messaging app. */
+  function smsFallback(){
+    stash(data);
     window.location.href = smsHref(PHONE_TEL, message);
-    showDone('Your messaging app should be open with the details filled in. Press send there and we will pick it up.');
+    showDone('Nearly there',
+      'Your messaging app should be open with the details filled in. Press send there and we will pick it up.');
   }
 
-  if(ENDPOINT){
-    var btn = form.querySelector('button[type=submit]');
-    if(btn){ btn.disabled = true; btn.textContent = 'Sending...'; }
-    fetch(ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    }).then(function(r){
-      if(!r.ok) throw new Error('bad status');
-      showDone('We have it. Someone will confirm a window with you shortly.');
-    }).catch(handoff);
-  } else {
-    handoff();
-  }
+  if(!ENDPOINT){ smsFallback(); return; }
+
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending...'; }
+  stash(data);
+
+  post(data).then(function(r){
+    if(r.ok){
+      unstash();
+      showDone('Request received',
+        'We have your details. Someone will confirm a window with you shortly &mdash; usually by text.');
+      return;
+    }
+    if(r.invalid){
+      /* Server disagreed with the input. Show it rather than silently
+         dumping them into SMS with bad data. */
+      unstash();
+      if(btn){ btn.disabled = false; btn.textContent = 'Send request'; }
+      var errs = (r.body && r.body.errors) || {};
+      if(errs.name)  markError(els.name, errs.name);
+      if(errs.phone) markError(els.phone, errs.phone);
+      return;
+    }
+    smsFallback();
+  }).catch(smsFallback);
 });
+
+retryPending();
 
 /* clear the error as soon as the visitor starts fixing it */
 form.addEventListener('input', function(e){

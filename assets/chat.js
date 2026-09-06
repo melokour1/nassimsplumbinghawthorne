@@ -21,11 +21,25 @@
 
 var CFG = window.NP = window.NP || {};
 var ENDPOINT   = CFG.chatEndpoint || null;
+var ESCALATE   = CFG.escalateEndpoint || null;
+var LEAD_URL   = CFG.bookEndpoint || null;
 var PHONE_TEL  = CFG.tel   || '+13106179503';
 var PHONE_TEXT = CFG.phone || '(310) 617-9503';
 var MARK       = CFG.markSrc || 'assets/mark.png';
 
 var MAX_TURNS = 24;   /* transcript sent to the server, in messages */
+
+/* Ties every turn, escalation and lead from this visit to one row
+   server-side, so a person opening it sees the whole thread. */
+var convoId = (function(){
+  try { return crypto.randomUUID(); }
+  catch(e){ return 'c' + Date.now() + Math.random().toString(36).slice(2); }
+})();
+
+/* Anything the visitor volunteers as they talk, reused so they are never
+   asked for the same detail twice. */
+var captured = { name: '', phone: '' };
+var awaitingPhone = false;
 
 /* ##### SECTION: CHAT / MARKUP ##### */
 var launcher = document.createElement('button');
@@ -146,19 +160,98 @@ function setChips(list){
 
 /* ##### SECTION: CHAT / HUMAN HANDOFF ##### */
 /* Always available, never gated. A trades customer who wants a person
-   should never have to argue with a bot to get one. */
-function handoff(reason){
+   should never have to argue with a bot to get one.
+   When an escalate endpoint is configured this actually pings the owner's
+   phone; without one it still gives them every way to reach a person. */
+function handoff(reason, opts){
+  opts = opts || {};
   handedOff = true;
   setChips([]);
   if(reason) bubble(reason, 'bot');
-  else bubble('Of course — here is how to reach someone directly. Calling is quickest; texting works too and we will come back to you.', 'bot');
+  else bubble('Of course — let me get a person onto this.', 'bot');
 
-  cards([
+  /* Already alerted server-side by /api/chat, so do not ping twice. */
+  if(opts.alerted){
+    afterAlert(true, opts.needsPhone !== false);
+    return;
+  }
+
+  if(ESCALATE){
+    var note = system('Passing this to someone now…');
+    postEscalation(reason).then(function(r){
+      if(note) note.remove();
+      afterAlert(r && r.alerted, r ? r.needsPhone : true, r && r.message);
+    }).catch(function(){
+      if(note) note.remove();
+      afterAlert(false, true);
+    });
+  } else {
+    afterAlert(false, true);
+  }
+}
+
+function postEscalation(reasonText){
+  var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 9000) : null;
+  return fetch(ESCALATE, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      conversationId: convoId,
+      transcript: history.slice(-30),
+      reason: 'asked_for_human',
+      summary: reasonText || lastUserSaid(),
+      name: captured.name || '',
+      phone: captured.phone || '',
+      page: location.pathname
+    }),
+    signal: ctrl ? ctrl.signal : undefined
+  }).then(function(r){
+    if(timer) clearTimeout(timer);
+    return r.json().catch(function(){ return {}; });
+  }).catch(function(e){
+    if(timer) clearTimeout(timer);
+    throw e;
+  });
+}
+
+/* What the visitor sees once we know whether a person was actually
+   reached. Never claim a callback nobody was told about. */
+function afterAlert(alerted, needsPhone, message){
+  if(alerted){
+    bubble(message || (captured.phone
+      ? 'Done — someone has your number and what we talked about. Expect a call shortly.'
+      : 'Someone has been alerted. Leave a number and they will call you back, or call now and skip the wait.'), 'bot');
+  } else {
+    bubble('Calling is quickest; texting works too and we will come back to you.', 'bot');
+  }
+
+  var list = [
     { icon: 'phone', label: 'Call ' + PHONE_TEXT, href: 'tel:' + PHONE_TEL },
-    { icon: 'sms',   label: 'Text us the details', href: smsWithTranscript() },
-    { icon: 'cal',   label: 'Book a visit instead', onClick: function(){ openBooking(); } }
-  ]);
-  system('A person will pick this up — the assistant stays here if you need it.');
+    { icon: 'sms',   label: 'Text us the details', href: smsWithTranscript() }
+  ];
+  if(alerted && needsPhone !== false && !captured.phone){
+    list.unshift({ icon: 'cal', label: 'Leave my number for a callback', onClick: askForCallback });
+  } else {
+    list.push({ icon: 'cal', label: 'Book a visit instead', onClick: function(){ openBooking(); } });
+  }
+  cards(list);
+}
+
+/* An escalation with no callback number is the commonest way these go
+   nowhere, so ask for one right in the thread. */
+function askForCallback(){
+  bubble('What is the best number to call you back on?', 'bot');
+  awaitingPhone = true;
+  input.placeholder = 'Your phone number…';
+  input.focus();
+}
+
+function lastUserSaid(){
+  for(var i = history.length - 1; i >= 0; i--){
+    if(history[i].role === 'user') return history[i].content;
+  }
+  return '';
 }
 
 /* Hands the conversation so far to the visitor's SMS app, so the person
@@ -239,27 +332,96 @@ function offlineReply(text){
 
 /* ##### SECTION: CHAT / CLAUDE BACKEND ##### */
 function askClaude(text){
+  var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 28000) : null;
+
   return fetch(ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messages: history.slice(-MAX_TURNS),
-      page: { title: document.title, url: location.pathname }
-    })
+      page: { title: document.title, url: location.pathname },
+      conversationId: convoId
+    }),
+    signal: ctrl ? ctrl.signal : undefined
   }).then(function(r){
+    if(timer) clearTimeout(timer);
     if(!r.ok) throw new Error('chat endpoint ' + r.status);
     return r.json();
+  }).catch(function(e){
+    if(timer) clearTimeout(timer);
+    throw e;
   });
 }
 
 /* ##### SECTION: CHAT / CONVERSATION ##### */
+/* ##### SECTION: CHAT / PHONE CAPTURE ##### */
+var PHONE_RE = /(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/;
+
+function grabPhone(text){
+  var m = text.match(PHONE_RE);
+  return m ? m[0] : '';
+}
+
+/* Turns a number given in the thread into a real, stored lead so the
+   callback survives the tab being closed. */
+function sendCallbackRequest(phone){
+  captured.phone = phone;
+  if(!LEAD_URL){
+    bubble('Thanks — call or text ' + PHONE_TEXT + ' and quote that number so we can match it up.', 'bot');
+    return;
+  }
+  var note = system('Sending that over…');
+  fetch(LEAD_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: captured.name || 'Website chat',
+      phone: phone,
+      service: 'From the chat assistant',
+      notes: lastUserSaid().slice(0, 500),
+      urgency: '',
+      source: 'chat_escalation',
+      conversationId: convoId,
+      page: document.title
+    })
+  }).then(function(r){ return r.json().catch(function(){ return {}; }); })
+    .then(function(j){
+      if(note) note.remove();
+      if(j && j.ok) bubble('Got it. Someone will call you on that number.', 'bot');
+      else throw new Error('not ok');
+    })
+    .catch(function(){
+      if(note) note.remove();
+      bubble('I could not log that from here. Call or text ' + PHONE_TEXT + ' and someone will pick up.', 'bot');
+      cards([{ icon: 'phone', label: 'Call ' + PHONE_TEXT, href: 'tel:' + PHONE_TEL }]);
+    });
+}
+
 function submit(text){
   if(busy || !text.trim()) return;
   text = text.trim();
   bubble(text, 'me');
-  history.push({ role: 'user', content: text });
   input.value = '';
   setChips([]);
+
+  /* We asked for a callback number and this is the answer. */
+  if(awaitingPhone){
+    var p = grabPhone(text);
+    awaitingPhone = false;
+    input.placeholder = 'Describe what it is doing…';
+    if(p){ sendCallbackRequest(p); return; }
+    bubble('That did not look like a phone number. Call ' + PHONE_TEXT + ' directly and someone will pick up.', 'bot');
+    cards([{ icon: 'phone', label: 'Call ' + PHONE_TEXT, href: 'tel:' + PHONE_TEL }]);
+    return;
+  }
+
+  if(!captured.phone){
+    var found = grabPhone(text);
+    if(found) captured.phone = found;
+  }
+
+  history.push({ role: 'user', content: text });
   busy = true;
   send.disabled = true;
 
@@ -286,7 +448,10 @@ function submit(text){
         bubble(data.reply, 'bot');
         history.push({ role: 'assistant', content: data.reply });
       }
-      if(data.handoff)  handoff(data.handoffMessage || null);
+      if(data.conversationId) convoId = data.conversationId;
+      /* The server already alerted a person when it handled the model's
+         connect_to_human tool -- pass that through so we do not ping twice. */
+      if(data.handoff)  handoff(data.handoffMessage || null, { alerted: data.alerted });
       if(data.book)     offerBooking(data.book);
       if(data.chips)    setChips(data.chips);
       if(urgent && !data.handoff) urgentCard();

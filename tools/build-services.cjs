@@ -371,15 +371,17 @@ function stickyBar(){
 function scripts(depth){
   const up = depth ? '../' : '';
   return `<script>
-/* Point these at your own endpoints to switch the assistant from its
-   built-in offline mode to Claude, and the booking form from SMS to a
-   server post. Leave them out and both still work with no backend. */
+/* These are safe to leave on. On a host without the functions (GitHub
+   Pages, or a plain file:// open) every call simply fails and the page
+   falls back on its own: booking composes a prefilled SMS, and the
+   assistant runs its built-in offline mode. Nothing to toggle. */
 window.NP = {
   phone: '${BIZ.phone}',
   tel: '${BIZ.tel}',
-  markSrc: '${up}assets/mark.png'
-  // chatEndpoint: '/api/chat',
-  // bookEndpoint: '/api/book'
+  markSrc: '${up}assets/mark.png',
+  bookEndpoint: '/api/lead',
+  chatEndpoint: '/api/chat',
+  escalateEndpoint: '/api/escalate'
 };
 </script>
 <script src="${up}assets/site.js"></script>
