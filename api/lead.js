@@ -30,15 +30,15 @@ export default async function handler(req, res) {
   const ip = clientIp(req);
   const ipHash = await hashIp(ip);
 
-  /* ##### SECTION: LEAD / RATE LIMIT ##### */
-  const rl = rateLimit(`lead:${ip}`, { limit: 5, windowMs: 10 * 60_000 });
-  if (!rl.ok) {
-    log("lead.rate_limited", { ipHash });
-    res.setHeader("Retry-After", String(rl.retryAfter));
+  /* ##### SECTION: LEAD / FLOOD GUARD #####
+     A coarse ceiling on raw requests, so a flood cannot burn CPU. Set
+     high enough that no real person meets it. */
+  const flood = rateLimit(`lead-req:${ip}`, { limit: 40, windowMs: 10 * 60_000 });
+  if (!flood.ok) {
+    log("lead.flooded", { ipHash });
+    res.setHeader("Retry-After", String(flood.retryAfter));
     return json(res, 429, {
-      ok: false,
-      error: "rate_limited",
-      fallback: true,
+      ok: false, error: "rate_limited", fallback: true,
       message: "That is a lot of requests in a short time. Call us instead and we will sort it out."
     });
   }
@@ -56,7 +56,24 @@ export default async function handler(req, res) {
   /* ##### SECTION: LEAD / VALIDATE ##### */
   const { ok, errors, data } = validateLead(body);
   if (!ok) {
+    /* Deliberately before the submission limit: a customer mistyping
+       their phone twice must not use up their own budget and get shut
+       out of the form. */
     return json(res, 400, { ok: false, error: "invalid", errors });
+  }
+
+  /* ##### SECTION: LEAD / SUBMISSION LIMIT #####
+     Only genuine, well-formed leads count here. Tight enough to stop a
+     stream of plausible-looking spam, loose enough for a household that
+     books twice or a shared office address. */
+  const rl = rateLimit(`lead:${ip}`, { limit: 6, windowMs: 10 * 60_000 });
+  if (!rl.ok) {
+    log("lead.rate_limited", { ipHash });
+    res.setHeader("Retry-After", String(rl.retryAfter));
+    return json(res, 429, {
+      ok: false, error: "rate_limited", fallback: true,
+      message: "That is a lot of requests in a short time. Call us instead and we will sort it out."
+    });
   }
 
   const meta = {
