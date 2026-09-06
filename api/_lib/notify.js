@@ -12,6 +12,7 @@
    ===================================================================== */
 
 import { CFG, HAS, withTimeout, log, redactPhone } from "./core.js";
+import { sendLeadAlert, sendAwayEscalation } from "./telegram.js";
 
 const TIMEOUT = 8000;
 
@@ -149,18 +150,25 @@ function escalationEmail(d) {
 }
 
 /* ##### SECTION: NOTIFY / PUBLIC ##### */
-/* Both channels fire together and neither can block the other. The
-   caller only needs to know whether *anything* got through. */
-async function fanOut(sms, email) {
-  const [smsRes, emailRes] = await Promise.allSettled([
+/* All three channels fire together and none can block the others. The
+   caller only needs to know whether *anything* got through.
+
+   Telegram is in here rather than only in the live-chat path, because
+   otherwise a booking that arrives while nobody is watching reaches
+   nobody at all until someone opens the admin page. It is free, so
+   there is no reason not to use it as the always-on channel. */
+async function fanOut(sms, email, telegram) {
+  const [smsRes, emailRes, tgRes] = await Promise.allSettled([
     sms ? sendSms(CFG.ops.sms, sms.body) : Promise.resolve({ ok: false, reason: "skipped" }),
-    email ? sendEmail(email.subject, email.html, email.replyTo) : Promise.resolve({ ok: false, reason: "skipped" })
+    email ? sendEmail(email.subject, email.html, email.replyTo) : Promise.resolve({ ok: false, reason: "skipped" }),
+    telegram ? telegram() : Promise.resolve({ ok: false, reason: "skipped" })
   ]);
 
   const s = smsRes.status === "fulfilled" ? smsRes.value : { ok: false, reason: "threw" };
   const e = emailRes.status === "fulfilled" ? emailRes.value : { ok: false, reason: "threw" };
+  const t = tgRes.status === "fulfilled" ? tgRes.value : { ok: false, reason: "threw" };
 
-  return { ok: s.ok || e.ok, sms: s, email: e };
+  return { ok: s.ok || e.ok || t.ok, sms: s, email: e, telegram: t };
 }
 
 export function notifyLead(data, meta = {}) {
@@ -171,17 +179,21 @@ export function notifyLead(data, meta = {}) {
       subject: `${urgent ? "URGENT " : ""}New lead: ${data.name} - ${data.service}`,
       html: leadEmail(data, meta),
       replyTo: null
-    }
+    },
+    () => sendLeadAlert(data, meta.conversationId || null)
   );
 }
 
-export function notifyEscalation(data) {
+/* `live` means a chat thread was already opened in the operator channel,
+   so a second Telegram message would just be noise. */
+export function notifyEscalation(data, { live = false } = {}) {
   return fanOut(
     { body: escalationSms(data) },
     {
       subject: `Website visitor wants a person${data.name ? `: ${data.name}` : ""}`,
       html: escalationEmail(data)
-    }
+    },
+    live ? null : () => sendAwayEscalation(data, data.conversationId || null)
   );
 }
 

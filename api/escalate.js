@@ -87,7 +87,10 @@ export default async function handler(req, res) {
       reason: data.reason,
       summary: data.summary
     }).catch((e) => ({ ok: false, error: e.message })),
-    notifyEscalation(data).catch((e) => ({ ok: false, error: e.message }))
+    /* When a live thread is opening, the handoff card below is the
+       Telegram message -- a second one would just be noise. */
+    notifyEscalation({ ...data, conversationId }, { live: goLive })
+      .catch((e) => ({ ok: false, error: e.message }))
   ]);
 
   /* Open the live thread in the operator channel and mark the

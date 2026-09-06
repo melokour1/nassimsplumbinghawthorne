@@ -96,6 +96,56 @@ export function customerLine(body) {
   return `👤 ${esc(body).slice(0, 1200)}`;
 }
 
+/* ##### SECTION: TELEGRAM / LEAD ALERTS #####
+   Telegram doubles as the notification channel, not just the live-chat
+   one. Without this a booking that arrives while nobody is watching
+   lands in the database and pings nobody until someone opens /admin. */
+
+/* Telegram linkifies a bare phone number, so it stays tappable on a
+   phone without needing an inline keyboard. */
+export function leadCard(d) {
+  const urgent = /emergency/i.test(d.urgency || "") || d.source === "chat_escalation";
+  return [
+    urgent ? "🚨 <b>URGENT LEAD</b>" : "🔧 <b>New lead</b>",
+    ``,
+    `<b>${esc(d.name)}</b>`,
+    `📞 ${esc(d.phone_display || d.phone)}`,
+    d.service ? `🛠 ${esc(d.service)}` : "",
+    d.city ? `📍 ${esc(d.city)}` : "",
+    d.address ? `🏠 ${esc(d.address)}` : "",
+    d.urgency ? `⏱ ${esc(d.urgency)}` : "",
+    d.notes ? `\n<b>What they said</b>\n${esc(d.notes).slice(0, 700)}` : "",
+    d.source && d.source !== "form" ? `\n<i>via the chat assistant</i>` : "",
+    d.page ? `<i>${esc(d.page)}</i>` : ""
+  ].filter(Boolean).join("\n");
+}
+
+/* Someone asked for a person but nobody was marked available, so there
+   is no live thread to open -- this is the "you missed one" message. */
+export function awayEscalationCard(d) {
+  const turns = (d.transcript || []).slice(-6)
+    .map((m) => `${m.role === "user" ? "👤" : "🤖"} ${esc(m.content).slice(0, 240)}`)
+    .join("\n");
+  return [
+    `🔔 <b>Someone wanted a person while you were away</b>`,
+    d.name ? `\n<b>${esc(d.name)}</b>` : "",
+    d.phone ? `📞 ${esc(d.phone_display || d.phone)}` : `📞 <i>no number yet — they may still leave one</i>`,
+    d.city ? `📍 ${esc(d.city)}` : "",
+    d.summary ? `\n${esc(d.summary)}` : "",
+    turns ? `\n<b>Conversation</b>\n${turns}` : "",
+    d.page ? `\n<i>${esc(d.page)}</i>` : "",
+    `\n<i>Send /available to take chats live.</i>`
+  ].filter(Boolean).join("\n");
+}
+
+export function sendLeadAlert(d, conversationId = null) {
+  return sendToOps(conversationId, leadCard(d));
+}
+
+export function sendAwayEscalation(d, conversationId = null) {
+  return sendToOps(conversationId, awayEscalationCard(d));
+}
+
 /* ##### SECTION: TELEGRAM / WEBHOOK SETUP ##### */
 /* Run once after deploying, or whenever the URL changes. */
 export function setWebhook(url) {

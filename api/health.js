@@ -45,12 +45,19 @@ export default async function handler(req, res) {
   const canCaptureLeads =
     (HAS.db && db.ok === true) ||
     (checks.sms.configured && checks.sms.reachable !== false) ||
-    (checks.email.configured && checks.email.reachable !== false);
+    (checks.email.configured && checks.email.reachable !== false) ||
+    (HAS.telegram && checks.liveChat.telegram?.reachable !== false);
+
+  /* Somewhere to send a new lead the moment it arrives. Telegram counts:
+     it is free, always on, and reaches both phone and desktop. */
+  const canAlert = HAS.telegram || HAS.sms || HAS.email;
 
   const warnings = [];
   if (!HAS.db)     warnings.push("No database: leads are not being stored, only forwarded.");
-  if (!HAS.sms)    warnings.push("No SMS: escalations will not reach a phone.");
-  if (!HAS.email)  warnings.push("No email: no durable record of leads.");
+  if (!canAlert)   warnings.push("CRITICAL: no alert channel. A lead will reach nobody until someone opens the admin page.");
+  else if (!HAS.sms && !HAS.email)
+    warnings.push("Alerts go to Telegram only. If Telegram is down or muted, nothing else will reach you.");
+  if (!HAS.email)  warnings.push("No email: no durable record outside the database.");
   if (!HAS.claude) warnings.push("No Anthropic key: the assistant runs in offline mode.");
   if (!HAS.admin)  warnings.push("No ADMIN_TOKEN: the admin lead view is disabled.");
   if (!canCaptureLeads) warnings.push("CRITICAL: nothing can capture a lead. The site will fall back to SMS.");
