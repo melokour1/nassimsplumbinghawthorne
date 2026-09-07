@@ -112,10 +112,34 @@ export async function getConversation(id) {
   }
 }
 
-/* Everything an operator needs to triage, newest activity first. */
+/* A visitor who closes the tab stops polling, so nothing client-side is
+   ever going to close their conversation. Left alone these pile up as
+   ghosts that make the operator's chat look busy and, worse, make a
+   plain typed reply ambiguous when it should not be. */
+const STALE_MINUTES = 20;
+
+async function sweepStale() {
+  const cutoff = new Date(Date.now() - STALE_MINUTES * 60_000).toISOString();
+  const patch = {
+    method: "PATCH",
+    headers: headers({ Prefer: "return=minimal" }),
+    body: JSON.stringify({ live_status: "closed", updated_at: new Date().toISOString() })
+  };
+  await Promise.allSettled([
+    /* nobody ever came */
+    rest(`conversations?live_status=eq.waiting&awaiting_since=lt.${cutoff}`, patch),
+    /* someone came, then the conversation went quiet */
+    rest(`conversations?live_status=eq.live&last_operator_at=lt.${cutoff}`, patch)
+  ]);
+}
+
+/* Everything an operator needs to triage, newest activity first.
+   Sweeps first so callers only ever see conversations that are really
+   still going. */
 export async function listLive() {
   if (!HAS.db) return { ok: false, reason: "not_configured" };
   try {
+    await sweepStale();
     const q = new URLSearchParams({
       select: "id,live_status,operator_name,awaiting_since,last_customer_at,last_operator_at,summary,page,city,created_at",
       live_status: "in.(waiting,live)",
