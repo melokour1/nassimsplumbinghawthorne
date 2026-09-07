@@ -270,8 +270,11 @@ function pollLive(){
         if(m.role === 'operator'){
           if(!live.connected){
             live.connected = true;
-            system((m.operator || 'Someone') + ' has joined');
-            setHeadState((m.operator || 'A person') + ' — live');
+            /* Deliberately anonymous. Whoever picks up introduces
+               themselves in their own words; the widget only signals
+               that the assistant has stepped aside. */
+            system('You are talking to a person now');
+            setHeadState('Live chat');
           }
           bubble(m.body, 'bot');
         } else if(m.role === 'system'){
@@ -281,7 +284,7 @@ function pollLive(){
 
       if(j.status === 'live' && !live.connected){
         live.connected = true;
-        setHeadState((j.operator || 'A person') + ' — live');
+        setHeadState('Live chat');
       }
 
       /* Nobody has answered yet. Offer a callback, but keep listening --
