@@ -21,10 +21,15 @@ import { verifyConversation } from "./_lib/session.js";
 import { addMessage, messagesSince, getConversation, patchConversation } from "./_lib/live.js";
 import { sendToOps, customerLine } from "./_lib/telegram.js";
 
-/* How long a visitor waits before we stop pretending someone is coming.
-   Long enough for a real person to finish what they were doing, short
-   enough that nobody sits staring at a spinner. */
-const WAIT_LIMIT_MS = 60_000;
+/* After this long with no operator, tell the visitor plainly and offer a
+   callback. The conversation is NOT closed -- a plumber under a sink
+   does not answer in a minute, and a reply that lands at four minutes
+   should still reach a chat window that is still open. */
+const STALL_AFTER_MS = 60_000;
+
+/* The point at which nobody is realistically coming and the widget can
+   stop polling. */
+const GIVE_UP_AFTER_MS = 15 * 60_000;
 
 export default async function handler(req, res) {
   if (cors(req, res)) return;
@@ -61,13 +66,18 @@ async function poll(req, res) {
   const row = convo.ok ? convo.row : null;
   let status = row?.live_status || "bot";
 
-  /* Nobody picked up in time. Flip to a callback rather than leaving
-     them watching an empty room. */
-  let timedOut = false;
+  /* Two separate ideas, previously conflated into one: nobody has
+     answered *yet*, and nobody is coming. The first should offer a
+     callback while still listening; only the second stops. */
+  let stalled = false;
+  let gaveUp = false;
+
   if (status === "waiting" && row?.awaiting_since) {
     const waited = Date.now() - new Date(row.awaiting_since).getTime();
-    if (waited > WAIT_LIMIT_MS) {
-      timedOut = true;
+    stalled = waited > STALL_AFTER_MS;
+
+    if (waited > GIVE_UP_AFTER_MS) {
+      gaveUp = true;
       patchConversation(id, { live_status: "closed" }).catch(() => {});
       status = "closed";
     }
@@ -76,7 +86,10 @@ async function poll(req, res) {
   return json(res, 200, {
     ok: true,
     status,
-    timedOut,
+    stalled,
+    gaveUp,
+    /* kept so an older cached widget still behaves sanely */
+    timedOut: gaveUp,
     operator: row?.operator_name || null,
     messages: (msgs.rows || []).map((m) => ({
       id: m.id,

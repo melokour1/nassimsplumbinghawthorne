@@ -82,19 +82,39 @@ export default async function handler(req, res) {
       return json(res, 200, { ok: true });
     }
 
-    /* ##### SECTION: TELEGRAM / OPERATOR REPLY ##### */
+    /* ##### SECTION: TELEGRAM / OPERATOR REPLY #####
+       Telegram's reply function pins a message to an exact conversation,
+       which matters when several are open at once. But in a one-to-one
+       chat nobody swipes to reply -- they just type. So a plain message
+       goes to the only open conversation, and reply-threading is only
+       required when there is genuinely something to disambiguate. */
     const replyToId = msg.reply_to_message?.message_id;
-    if (!replyToId) {
-      await replyTo(chatId,
-        "Reply <b>to a customer message</b> and it goes straight to them.\n\n" +
-        "Commands: /available, /away, /status, /close");
-      return json(res, 200, { ok: true });
-    }
+    let conversationId = replyToId ? await conversationForTelegram(replyToId) : null;
 
-    const conversationId = await conversationForTelegram(replyToId);
     if (!conversationId) {
-      await replyTo(chatId, "I could not match that reply to a conversation. It may have ended.");
-      return json(res, 200, { ok: true });
+      const live = await listLive();
+      const open = (live.rows || []).filter((c) => c.live_status === "waiting" || c.live_status === "live");
+
+      if (open.length === 1) {
+        conversationId = open[0].id;
+      } else if (open.length > 1) {
+        const lines = open.map((c) =>
+          `• <code>${String(c.id).slice(0, 8)}</code> ${c.city || "Website visitor"}${c.summary ? " — " + c.summary.slice(0, 50) : ""}`
+        ).join("\n");
+        await replyTo(chatId,
+          `There are <b>${open.length}</b> conversations open, so I do not know which one you mean.\n\n` +
+          `${lines}\n\n` +
+          `<b>Swipe left on a customer message and hit Reply</b> to answer that one.`);
+        return json(res, 200, { ok: true });
+      } else if (replyToId) {
+        await replyTo(chatId, "That conversation has ended. Nothing is waiting right now.");
+        return json(res, 200, { ok: true });
+      } else {
+        await replyTo(chatId,
+          "Nobody is waiting at the moment, so there is nothing to send this to.\n\n" +
+          "Commands: /available, /away, /status, /close");
+        return json(res, 200, { ok: true });
+      }
     }
 
     const stored = await addMessage(conversationId, "operator", text, operatorName);

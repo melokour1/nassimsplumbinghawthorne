@@ -224,7 +224,7 @@ function postEscalation(reasonText){
    A real person is reachable in this window. Used when someone is on a
    computer with no phone to hand -- which is exactly when a "we'll call
    you" is useless. */
-var live = { on: false, token: null, lastId: 0, timer: null, connected: false };
+var live = { on: false, token: null, lastId: 0, timer: null, connected: false, stalledShown: false };
 
 function startLive(token, message){
   live.on = true;
@@ -241,6 +241,7 @@ function startLive(token, message){
 
 function stopLive(){
   live.on = false;
+  live.stalledShown = false;
   if(live.timer){ clearInterval(live.timer); live.timer = null; }
   setHeadState('AI assistant');
   input.placeholder = 'Describe what it is doing…';
@@ -283,13 +284,36 @@ function pollLive(){
         setHeadState((j.operator || 'A person') + ' — live');
       }
 
-      /* Nobody came. Say so and take a number instead of leaving them
-         watching an empty room. */
-      if(j.timedOut || j.status === 'closed'){
+      /* Nobody has answered yet. Offer a callback, but keep listening --
+         a plumber under a sink does not reply inside a minute, and a
+         reply at four minutes should still land in an open window. */
+      if(j.stalled && !live.connected && !live.stalledShown){
+        live.stalledShown = true;
+        bubble('Nobody has picked up yet. Leave a number and someone will call you back — or call now and skip the wait. I will keep this open in case they reply.', 'bot');
+        askForCallback();
+        setHeadState('Still trying…');
+        /* Ease off the polling; nothing is likely in the next few seconds. */
+        if(live.timer){ clearInterval(live.timer); live.timer = setInterval(pollLive, 8000); }
+      }
+
+      /* Someone arrived after the callback offer -- clear the fallback
+         prompt so they are not answering two things at once. */
+      if(live.connected && live.stalledShown){
+        live.stalledShown = false;
+        awaitingPhone = false;
+        input.placeholder = 'Type your message…';
+        if(live.timer){ clearInterval(live.timer); live.timer = setInterval(pollLive, 3000); }
+      }
+
+      /* Genuinely over: the operator closed it, or nobody came at all. */
+      if(j.gaveUp || j.status === 'closed'){
         stopLive();
         if(!live.connected){
-          bubble('Nobody is free to type right now, sorry. Leave a number and someone will call you back — or call now and skip the wait.', 'bot');
-          askForCallback();
+          bubble('Still nobody free, sorry. Calling is the quickest way from here.', 'bot');
+          cards([
+            { icon: 'phone', label: 'Call ' + PHONE_TEXT, href: 'tel:' + PHONE_TEL },
+            { icon: 'cal',   label: 'Book a visit', onClick: function(){ openBooking(); } }
+          ]);
         } else {
           system('Chat ended');
           cards([
