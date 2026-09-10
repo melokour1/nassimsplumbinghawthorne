@@ -1,0 +1,24 @@
+# dependencies
+node_modules/
+
+# secrets -- ANTHROPIC_API_KEY belongs in the host's env vars, never in the repo
+.env
+.env.*
+!.env.example
+
+# generated partials (rebuilt by tools/build-services.cjs)
+tools/footer-root.html
+tools/nav-root.html
+tools/topbar-root.html
+tools/sticky-root.html
+tools/scripts-root.html
+tools/services-grid-root.html
+
+# 83 MB reference screen recording -- kept locally, not worth versioning
+websiteinspirationvideo/
+
+# local tooling
+.claude/
+.vercel/
+.DS_Store
+Thumbs.db

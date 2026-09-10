@@ -1,0 +1,13 @@
+{
+  "name": "nassims-plumbing-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static site for Nassim's Plumbing. The only server-side piece is api/chat.js, which backs the website assistant.",
+  "type": "module",
+  "scripts": {
+    "build:services": "node tools/build-services.cjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.70.0"
+  }
+}

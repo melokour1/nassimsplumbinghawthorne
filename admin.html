@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Leads — Nassim's Plumbing</title>
+<link rel="icon" href="assets/mark.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ##### SECTION: ADMIN / STYLES ##### */
+:root{
+  --ink:#050d1c; --card:#0a1526; --line:rgba(140,175,225,.16);
+  --steel:#8ea3c4; --mist:#c3d3ea; --white:#f2f7ff; --aqua:#3fe0d0; --amber:#ffc24a;
+  --sans:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--ink);color:var(--mist);font-family:var(--sans);font-size:15px;line-height:1.6}
+a{color:inherit}
+.wrap{max-width:1100px;margin-inline:auto;padding:28px clamp(16px,4vw,40px) 80px}
+
+header{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:26px}
+header h1{font-size:22px;margin:0;color:var(--white);font-weight:600}
+header .chip{width:42px;height:42px;border-radius:11px;background:#fff;display:grid;place-items:center;padding:5px}
+header .chip img{width:100%}
+.brand{display:flex;align-items:center;gap:12px}
+
+button,select,input{font-family:var(--sans);font-size:14px}
+.btn{
+  padding:10px 17px;border-radius:999px;border:1px solid var(--line);background:none;
+  color:var(--white);cursor:pointer;transition:border-color .25s,background .25s;
+}
+.btn:hover{border-color:rgba(63,224,208,.6);background:rgba(63,224,208,.08)}
+.btn.primary{background:var(--aqua);color:#04121d;border-color:transparent;font-weight:600}
+
+/* gate */
+#gate{max-width:420px;margin:14vh auto;padding:32px;background:var(--card);border:1px solid var(--line);border-radius:18px}
+#gate h1{font-size:20px;margin:0 0 8px;color:var(--white)}
+#gate p{margin:0 0 22px;color:var(--steel);font-size:14px}
+#gate input{
+  width:100%;padding:13px 15px;border-radius:11px;background:#07101f;color:var(--white);
+  border:1px solid var(--line);margin-bottom:14px;
+}
+#gate input:focus{outline:none;border-color:rgba(63,224,208,.7)}
+#gateErr{color:#ff9a9a;font-size:13px;min-height:20px}
+
+/* filters + stats */
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:20px}
+.bar select{padding:9px 13px;border-radius:9px;background:#07101f;color:var(--white);border:1px solid var(--line)}
+.stats{display:flex;gap:9px;flex-wrap:wrap;margin-left:auto}
+.stats span{
+  font-size:12px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);color:var(--steel);
+}
+.stats b{color:var(--white)}
+
+/* leads */
+.lead{
+  background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:18px 20px;margin-bottom:12px;
+}
+.lead.urgent{border-color:rgba(255,194,74,.5);background:#141126}
+.lead-top{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:baseline}
+.lead h3{margin:0;font-size:17px;color:var(--white);font-weight:600}
+.lead .when{font-size:12.5px;color:var(--steel);white-space:nowrap}
+.lead .meta{display:flex;gap:8px;flex-wrap:wrap;margin:11px 0 0}
+.lead .meta span{font-size:12px;padding:5px 11px;border-radius:999px;background:rgba(140,175,225,.09);color:var(--mist)}
+.lead .meta .hot{background:rgba(255,194,74,.16);color:var(--amber);font-weight:600}
+.lead .notes{margin:13px 0 0;font-size:14px;color:var(--mist);white-space:pre-wrap}
+.lead .acts{display:flex;gap:9px;flex-wrap:wrap;margin-top:15px;align-items:center}
+.lead .tel{
+  display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:999px;
+  background:var(--aqua);color:#04121d;text-decoration:none;font-weight:600;font-size:13.5px;
+}
+.lead select{padding:8px 12px;border-radius:9px;background:#07101f;color:var(--white);border:1px solid var(--line)}
+.empty,.msg{text-align:center;padding:60px 20px;color:var(--steel)}
+.msg.err{color:#ff9a9a}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+
+<!-- ##### SECTION: ADMIN / GATE ##### -->
+<div id="gate">
+  <h1>Leads</h1>
+  <p>Enter the admin token. It is stored on this device only, so you do this once per browser.</p>
+  <input id="token" type="password" placeholder="Admin token" autocomplete="current-password">
+  <div id="gateErr"></div>
+  <button class="btn primary" id="unlock" style="width:100%">Unlock</button>
+</div>
+
+<!-- ##### SECTION: ADMIN / APP ##### -->
+<div class="wrap" id="app" hidden>
+  <header>
+    <div class="brand">
+      <span class="chip"><img src="assets/mark.png" alt=""></span>
+      <h1>Leads</h1>
+    </div>
+    <div style="display:flex;gap:9px">
+      <button class="btn" id="refresh">Refresh</button>
+      <button class="btn" id="lock">Lock</button>
+    </div>
+  </header>
+
+  <div class="bar">
+    <select id="filter">
+      <option value="">All statuses</option>
+      <option value="new" selected>New</option>
+      <option value="contacted">Contacted</option>
+      <option value="scheduled">Scheduled</option>
+      <option value="done">Done</option>
+      <option value="lost">Lost</option>
+    </select>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div id="list"></div>
+</div>
+
+<script>
+/* =====================================================================
+   ##### SECTION: ADMIN / SCRIPT #####
+   Reads /api/leads with a bearer token kept in localStorage. No build,
+   no framework -- this is a working screen for one or two people, not a
+   CRM, and it should stay that way.
+   ===================================================================== */
+(function(){
+'use strict';
+
+var KEY = 'np_admin_token';
+var gate = document.getElementById('gate');
+var app  = document.getElementById('app');
+var list = document.getElementById('list');
+var stats = document.getElementById('stats');
+var gateErr = document.getElementById('gateErr');
+var token = '';
+
+try { token = localStorage.getItem(KEY) || ''; } catch(e){}
+
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function ago(iso){
+  var d = new Date(iso), s = (Date.now() - d) / 1000;
+  if(s < 60)    return 'just now';
+  if(s < 3600)  return Math.floor(s/60) + 'm ago';
+  if(s < 86400) return Math.floor(s/3600) + 'h ago';
+  if(s < 604800) return Math.floor(s/86400) + 'd ago';
+  return d.toLocaleDateString();
+}
+
+function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({ Authorization: 'Bearer ' + token }, opts.headers || {});
+  return fetch(path, opts).then(function(r){
+    return r.json().catch(function(){ return {}; }).then(function(j){
+      if(r.status === 401) { throw Object.assign(new Error('unauthorised'), { auth: true }); }
+      if(!r.ok) throw new Error(j.message || j.error || ('HTTP ' + r.status));
+      return j;
+    });
+  });
+}
+
+function render(leads, counts){
+  if(!leads.length){
+    list.innerHTML = '<p class="empty">Nothing here yet.</p>';
+  } else {
+    list.innerHTML = leads.map(function(l){
+      var urgent = /emergency/i.test(l.urgency || '') || l.source === 'chat_escalation';
+      return '<article class="lead' + (urgent ? ' urgent' : '') + '">' +
+        '<div class="lead-top">' +
+          '<h3>' + esc(l.name) + '</h3>' +
+          '<span class="when">' + esc(ago(l.created_at)) + '</span>' +
+        '</div>' +
+        '<div class="meta">' +
+          (l.service ? '<span>' + esc(l.service) + '</span>' : '') +
+          (l.city ? '<span>' + esc(l.city) + '</span>' : '') +
+          (l.urgency ? '<span' + (urgent ? ' class="hot"' : '') + '>' + esc(l.urgency) + '</span>' : '') +
+          (l.source && l.source !== 'form' ? '<span>via chat</span>' : '') +
+          (l.address ? '<span>' + esc(l.address) + '</span>' : '') +
+        '</div>' +
+        (l.notes ? '<p class="notes">' + esc(l.notes) + '</p>' : '') +
+        '<div class="acts">' +
+          '<a class="tel" href="tel:' + esc(l.phone) + '">Call ' + esc(l.phone) + '</a>' +
+          '<a class="btn" href="sms:' + esc(l.phone) + '">Text</a>' +
+          '<select data-id="' + esc(l.id) + '">' +
+            ['new','contacted','scheduled','done','lost'].map(function(s){
+              return '<option value="' + s + '"' + (l.status === s ? ' selected' : '') + '>' + s + '</option>';
+            }).join('') +
+          '</select>' +
+        '</div>' +
+      '</article>';
+    }).join('');
+  }
+
+  stats.innerHTML = Object.keys(counts || {}).map(function(k){
+    return '<span>' + esc(k) + ' <b>' + counts[k] + '</b></span>';
+  }).join('');
+}
+
+function load(){
+  var status = document.getElementById('filter').value;
+  list.innerHTML = '<p class="msg">Loading…</p>';
+  api('/api/leads' + (status ? '?status=' + status : ''))
+    .then(function(j){ render(j.leads || [], j.counts || {}); })
+    .catch(function(err){
+      if(err.auth){ lock('That token was not accepted.'); return; }
+      list.innerHTML = '<p class="msg err">' + esc(err.message) + '</p>';
+    });
+}
+
+function unlock(){
+  gate.hidden = true;
+  app.hidden = false;
+  load();
+}
+
+function lock(message){
+  try { localStorage.removeItem(KEY); } catch(e){}
+  token = '';
+  app.hidden = true;
+  gate.hidden = false;
+  gateErr.textContent = message || '';
+}
+
+document.getElementById('unlock').addEventListener('click', function(){
+  var v = document.getElementById('token').value.trim();
+  if(!v){ gateErr.textContent = 'Enter the token.'; return; }
+  token = v;
+  try { localStorage.setItem(KEY, v); } catch(e){}
+  gateErr.textContent = '';
+  unlock();
+});
+document.getElementById('token').addEventListener('keydown', function(e){
+  if(e.key === 'Enter') document.getElementById('unlock').click();
+});
+document.getElementById('refresh').addEventListener('click', load);
+document.getElementById('lock').addEventListener('click', function(){ lock(); });
+document.getElementById('filter').addEventListener('change', load);
+
+list.addEventListener('change', function(e){
+  var sel = e.target.closest('select[data-id]');
+  if(!sel) return;
+  sel.disabled = true;
+  api('/api/leads', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: sel.getAttribute('data-id'), status: sel.value })
+  }).then(load).catch(function(){ sel.disabled = false; });
+});
+
+if(token) unlock();
+
+})();
+</script>
+</body>
+</html>
