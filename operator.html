@@ -34,7 +34,14 @@ button,input,textarea{font-family:var(--sans);font-size:14px}
 .btn.primary{background:var(--aqua);color:#04121d;border-color:transparent;font-weight:600}
 
 /* shell */
-#app{display:grid;grid-template-rows:auto 1fr;height:100%}
+#app{display:grid;grid-template-rows:auto auto 1fr;height:100%}
+.errbar{padding:10px 20px;font-size:13.5px;color:#2a1200;background:var(--amber)}
+/* Pin each band to its row. When the error bar is hidden it leaves the grid,
+   and without this the columns would slide up into its auto-height row and
+   collapse to the height of their content. */
+#app > .top{grid-row:1}
+#app > .errbar{grid-row:2}
+#app > .cols{grid-row:3}
 .top{
   display:flex;align-items:center;gap:14px;padding:12px 20px;
   border-bottom:1px solid var(--line);background:var(--card);flex-wrap:wrap;
@@ -106,6 +113,8 @@ button,input,textarea{font-family:var(--sans);font-size:14px}
     <button class="btn" id="lock">Lock</button>
   </div>
 
+  <div class="errbar" id="err" role="alert" hidden></div>
+
   <div class="cols" id="cols">
     <div class="list" id="list"></div>
     <div class="thread-wrap">
@@ -134,8 +143,15 @@ button,input,textarea{font-family:var(--sans);font-size:14px}
 'use strict';
 
 var KEY = 'np_admin_token';
+
+/* A token copied off a web page often arrives with a stray long dash or an
+   invisible space. Anything outside plain ASCII makes the browser refuse
+   to build the Authorization header, so the request never leaves -- and it
+   fails before the server can say "wrong token". Strip it at the door. */
+function cleanToken(v){ return String(v || '').replace(/[^!-~]/g, ''); }
+
 var token = '';
-try { token = localStorage.getItem(KEY) || ''; } catch(e){}
+try { token = cleanToken(localStorage.getItem(KEY)); } catch(e){}
 
 var el = function(id){ return document.getElementById(id); };
 var current = null, lastId = 0, listTimer = null, threadTimer = null;
@@ -156,7 +172,10 @@ function ago(iso){
 function api(path, opts){
   opts = opts || {};
   opts.headers = Object.assign({ Authorization: 'Bearer ' + token }, opts.headers || {});
-  return fetch('/api/operator' + path, opts).then(function(r){
+  var req;
+  try { req = fetch('/api/operator' + path, opts); }
+  catch(e){ req = Promise.reject(e); }
+  return req.then(function(r){
     return r.json().catch(function(){ return {}; }).then(function(j){
       if(r.status === 401) throw Object.assign(new Error('unauthorised'), { auth: true });
       if(!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
@@ -174,6 +193,7 @@ function loadList(){
     var rows = j.conversations || [];
     if(!rows.length){
       el('list').innerHTML = '<div class="empty">Nobody waiting.<br><br>Turn on <b>Available</b> so the website starts offering live chat.</div>';
+      showError('');
       return;
     }
     el('list').innerHTML = rows.map(function(c){
@@ -185,9 +205,19 @@ function loadList(){
         '<p>' + esc(c.summary || 'No summary') + '</p>' +
       '</div>';
     }).join('');
+    showError('');
   }).catch(function(err){
-    if(err.auth) lock('Token rejected.');
+    if(err.auth){ lock('Token rejected.'); return; }
+    showError('Could not load conversations (' + (err.message || 'network error') + '). Retrying…');
   });
+}
+
+/* A blank list with no explanation is indistinguishable from "nobody is
+   waiting", which is the one thing this screen must never get wrong. */
+function showError(text){
+  var box = el('err');
+  box.textContent = text;
+  box.hidden = !text;
 }
 
 /* ##### SECTION: CONSOLE / THREAD ##### */
@@ -267,7 +297,12 @@ el('avail').addEventListener('change', function(){
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'presence', available: on, name: 'Console' })
-  }).catch(function(){ el('avail').checked = !on; });
+  }).catch(function(err){
+    el('avail').checked = !on;
+    el('dot').className = 'dot' + (!on ? ' on' : '');
+    if(err && err.auth){ lock('Token rejected.'); return; }
+    showError('Could not change availability (' + ((err && err.message) || 'network error') + ').');
+  });
 });
 
 /* ##### SECTION: CONSOLE / SESSION ##### */
@@ -288,7 +323,7 @@ function lock(message){
 }
 
 el('unlock').addEventListener('click', function(){
-  var v = el('token').value.trim();
+  var v = cleanToken(el('token').value);
   if(!v){ el('gateErr').textContent = 'Enter the token.'; return; }
   token = v;
   try { localStorage.setItem(KEY, v); } catch(e){}

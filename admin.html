@@ -228,7 +228,8 @@ function lock(message){
 }
 
 document.getElementById('unlock').addEventListener('click', function(){
-  var v = document.getElementById('token').value.trim();
+  /* strip anything a copy-paste dragged along: long dashes, invisible spaces */
+  var v = document.getElementById('token').value.replace(/[^!-~]/g, '');
   if(!v){ gateErr.textContent = 'Enter the token.'; return; }
   token = v;
   try { localStorage.setItem(KEY, v); } catch(e){}
