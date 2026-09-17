@@ -71,7 +71,7 @@ button,input,textarea{font-family:var(--sans);font-size:14px}
 .empty{padding:40px 20px;text-align:center;color:var(--steel);font-size:14px}
 
 /* thread */
-.thread-wrap{display:grid;grid-template-rows:auto 1fr auto;min-height:0}
+.thread-wrap{display:grid;grid-template-rows:auto 1fr auto auto auto;min-height:0}
 .thead{padding:13px 20px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:center}
 .thead b{color:var(--white);font-size:15px;flex:1}
 .thread{overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:11px;min-height:0}
@@ -80,7 +80,39 @@ button,input,textarea{font-family:var(--sans);font-size:14px}
 .m.operator{align-self:flex-end;background:var(--aqua);color:#04121d;border-bottom-right-radius:5px}
 .m.system{align-self:center;background:none;color:var(--steel);font-size:12px;max-width:100%}
 .m .who{display:block;font-size:10.5px;opacity:.7;margin-bottom:3px;letter-spacing:.06em}
-.compose{display:flex;gap:10px;padding:14px 20px;border-top:1px solid var(--line);background:var(--card)}
+.compose{display:flex;align-items:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--line);background:var(--card)}
+.compose .btn{height:44px;flex:0 0 auto}
+
+/* what the visitor told the assistant before asking for a person */
+.m.ctx{opacity:.75;font-size:13.5px}
+.m.ctx.customer{background:#0c1a30}
+.m.ctx.bot{align-self:flex-end;background:none;border:1px dashed var(--line);border-bottom-right-radius:5px}
+.divider{align-self:stretch;display:flex;align-items:center;gap:12px;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--steel);margin:6px 0}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
+
+/* quick replies */
+.quick{display:flex;flex-wrap:wrap;gap:8px;padding:12px 20px 0;background:var(--card);border-top:1px solid var(--line)}
+@media (max-width:800px){
+  /* on a phone a wrapped block of ten chips would eat the thread, so it
+     becomes one swipeable row instead */
+  .quick{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+  .quick::-webkit-scrollbar{display:none}
+}
+.quick + .qedit + .compose,.quick + .compose{border-top:0}
+.quick button{
+  flex:0 0 auto;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:none;
+  color:var(--mist);font-size:12.5px;cursor:pointer;white-space:nowrap;transition:.2s;
+}
+.quick button:hover{border-color:rgba(63,224,208,.6);color:var(--white);background:rgba(63,224,208,.07)}
+.quick button.edit{color:var(--steel);border-style:dashed}
+.qedit{padding:16px 20px;background:var(--card);border-top:1px solid var(--line)}
+.qedit p{margin:0 0 10px;font-size:13px;color:var(--steel)}
+.qedit textarea{
+  width:100%;height:210px;resize:vertical;padding:12px 14px;border-radius:12px;background:#07101f;
+  color:var(--white);border:1px solid var(--line);line-height:1.55;font-size:13px;
+}
+.qedit textarea:focus{outline:none;border-color:rgba(63,224,208,.7)}
+.qedit .row{display:flex;gap:9px;margin-top:10px;flex-wrap:wrap}
 .compose textarea{
   flex:1;resize:none;height:44px;max-height:120px;padding:12px 15px;border-radius:12px;
   background:#07101f;color:var(--white);border:1px solid var(--line);line-height:1.4;
@@ -124,6 +156,16 @@ button,input,textarea{font-family:var(--sans);font-size:14px}
         <button class="btn" id="close" hidden>Close chat</button>
       </div>
       <div class="thread" id="thread"><div class="pick">Waiting conversations appear on the left.</div></div>
+      <div class="quick" id="quick" hidden></div>
+      <div class="qedit" id="qedit" hidden>
+        <p>One reply per line, as <b>Button label | Message</b>. Saved on this device.</p>
+        <textarea id="qtext" spellcheck="true"></textarea>
+        <div class="row">
+          <button class="btn primary" id="qsave">Save</button>
+          <button class="btn" id="qreset">Restore defaults</button>
+          <button class="btn" id="qcancel">Cancel</button>
+        </div>
+      </div>
       <div class="compose" hidden id="compose">
         <textarea id="msg" placeholder="Type a reply…" rows="1"></textarea>
         <button class="btn primary" id="send">Send</button>
@@ -225,6 +267,7 @@ function openThread(id){
   current = id; lastId = 0;
   el('thread').innerHTML = '';
   el('compose').hidden = false;
+  el('quick').hidden = false;
   el('close').hidden = false;
   el('back').hidden = window.innerWidth > 800;
   el('cols').classList.add('open');
@@ -237,6 +280,23 @@ function loadThread(reset){
   return api('?action=thread&c=' + encodeURIComponent(current) + '&after=' + lastId).then(function(j){
     var c = j.conversation;
     if(c) el('who').textContent = (c.city || 'Website visitor') + (c.live_status === 'closed' ? ' — closed' : '');
+
+    /* Without this the operator opens a waiting chat to an empty window
+       and has to ask the customer to repeat everything. */
+    if(reset && c && Array.isArray(c.transcript) && c.transcript.length){
+      c.transcript.forEach(function(t){
+        if(!t || typeof t.content !== 'string') return;
+        var d = document.createElement('div');
+        d.className = 'm ctx ' + (t.role === 'user' ? 'customer' : 'bot');
+        d.innerHTML = '<span class="who">' + (t.role === 'user' ? 'Customer' : 'Assistant') + '</span>' + esc(t.content);
+        el('thread').appendChild(d);
+      });
+      var dv = document.createElement('div');
+      dv.className = 'divider';
+      dv.textContent = 'They asked for a person here';
+      el('thread').appendChild(dv);
+    }
+
     (j.messages || []).forEach(function(m){
       lastId = Math.max(lastId, m.id);
       var d = document.createElement('div');
@@ -280,6 +340,8 @@ el('back').addEventListener('click', function(){
   current = null;
   el('cols').classList.remove('open');
   el('compose').hidden = true;
+  el('quick').hidden = true;
+  el('qedit').hidden = true;
   el('close').hidden = true;
 });
 el('close').addEventListener('click', function(){
@@ -304,6 +366,92 @@ el('avail').addEventListener('change', function(){
     showError('Could not change availability (' + ((err && err.message) || 'network error') + ').');
   });
 });
+
+/* ##### SECTION: CONSOLE / QUICK REPLIES #####
+   A chip drops its text into the box; it never sends by itself. The
+   point is to save typing, not to fire a canned line at the wrong
+   customer -- you still read it, adjust it, and press Enter.
+
+   Defaults avoid prices and arrival times on purpose. Those are yours to
+   give, in your own words, once you know the job. */
+var QKEY = 'np_quick_replies_v1';
+var QUICK_DEFAULTS = [
+  ['Hello',        "Hi, thanks for reaching out to Nassim's Plumbing. I'm here now — what's going on?"],
+  ['One or many?', "Is it just that one fixture, or are others doing it too? And how long has it been going on?"],
+  ['Shut-off',     "First thing: find the main water shut-off — usually by the meter or where the line comes into the house — and turn it clockwise until it stops. Tell me once it's off."],
+  ['Address',      "What's the address, and the best number to reach you on?"],
+  ['Call you',     "This will be quicker by phone. What's the best number, and is now a good time?"],
+  ['Book a time',  "I can get someone out to you. What day works, and is morning or afternoon better?"],
+  ['Quote',        "I can't give an exact number without seeing it, but there's no charge to come out and quote in our area, and you get one flat price in writing before any work starts."],
+  ['On a job',     "I'm in the middle of a job right now. Leave me your number and address and I'll call you as soon as I'm done."],
+  ['Gas smell',    "If you can smell gas, leave the building now and call the gas company from outside. Once you're safe, call us on (310) 617-9503."],
+  ['Wrap up',      "You're all set. If anything changes, call or text (310) 617-9503. Thanks for choosing Nassim's Plumbing."]
+];
+
+function loadQuick(){
+  try {
+    var raw = JSON.parse(localStorage.getItem(QKEY) || 'null');
+    if(Array.isArray(raw) && raw.length) return raw;
+  } catch(e){}
+  return QUICK_DEFAULTS;
+}
+
+function renderQuick(){
+  var box = el('quick');
+  box.innerHTML = '';
+  loadQuick().forEach(function(q){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = q[0];
+    b.title = q[1];
+    b.addEventListener('click', function(){ insertReply(q[1]); });
+    box.appendChild(b);
+  });
+  var e = document.createElement('button');
+  e.type = 'button';
+  e.className = 'edit';
+  e.textContent = 'Edit replies';
+  e.addEventListener('click', openQuickEditor);
+  box.appendChild(e);
+}
+
+function insertReply(text){
+  var box = el('msg');
+  box.value = box.value.trim() ? box.value.replace(/\s+$/, '') + ' ' + text : text;
+  box.style.height = '44px';
+  box.style.height = Math.min(box.scrollHeight, 120) + 'px';
+  box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
+}
+
+function openQuickEditor(){
+  el('qtext').value = loadQuick().map(function(q){ return q[0] + ' | ' + q[1]; }).join('\n');
+  el('qedit').hidden = false;
+  el('qtext').focus();
+}
+
+el('qsave').addEventListener('click', function(){
+  var rows = el('qtext').value.split('\n').map(function(line){
+    var i = line.indexOf('|');
+    if(i < 1) return null;
+    var label = line.slice(0, i).trim().slice(0, 24);
+    var text  = line.slice(i + 1).trim();
+    return (label && text) ? [label, text] : null;
+  }).filter(Boolean);
+  if(!rows.length){ showError('Nothing to save — each line needs a label, a | and a message.'); return; }
+  try { localStorage.setItem(QKEY, JSON.stringify(rows)); } catch(e){}
+  showError('');
+  el('qedit').hidden = true;
+  renderQuick();
+});
+el('qreset').addEventListener('click', function(){
+  try { localStorage.removeItem(QKEY); } catch(e){}
+  el('qedit').hidden = true;
+  renderQuick();
+});
+el('qcancel').addEventListener('click', function(){ el('qedit').hidden = true; });
+
+renderQuick();
 
 /* ##### SECTION: CONSOLE / SESSION ##### */
 function start(){
